@@ -1,79 +1,147 @@
-"""S3 - funções simples para upload de imagens."""
-
-import hashlib
-from datetime import datetime
-from io import BytesIO
-from typing import Any
+"""\nCliente S3 completo para VIRAG-BIM.\nUpload, download, listagem e gestão de arquivos.\n"""
 
 import aioboto3
-from PIL import Image
-from ulid import ULID
+import structlog
+from botocore.exceptions import ClientError
 
-from app.core.settings import settings
-
-
-def _generate_s3_key(project_id: str, extension: str = "jpg") -> str:
-    """Gera chave S3 com particionamento temporal."""
-    now = datetime.utcnow()
-    ulid = str(ULID())
-    return f"{project_id}/year={now.year}/month={now.month:02d}/day={now.day:02d}/{ulid}.{extension}"
+logger = structlog.get_logger(__name__)
 
 
-def _compress_image(image_data: bytes, quality: int = 85) -> bytes:
-    """Comprime imagem."""
-    img = Image.open(BytesIO(image_data))
-    
-    if img.mode in ("RGBA", "LA", "P"):
-        img = img.convert("RGB")
-    
-    img.thumbnail((1920, 1080), Image.Resampling.LANCZOS)
-    
-    output = BytesIO()
-    img.save(output, format="JPEG", quality=quality, optimize=True)
-    return output.getvalue()
+class S3Client:
+    """Cliente S3 com interface completa."""
 
+    def __init__(self, bucket_name: str, endpoint_url: str | None = None):
+        self.bucket_name = bucket_name
+        self.endpoint_url = endpoint_url
+        self.session = aioboto3.Session()
 
-def _calculate_md5(data: bytes) -> str:
-    """Calcula hash MD5."""
-    return hashlib.md5(data).hexdigest()
+    async def upload_file(
+        self,
+        file_data: bytes,
+        s3_key: str,
+        content_type: str = "application/octet-stream",
+        metadata: dict | None = None,
+    ) -> dict:
+        """
+        Faz upload de arquivo para S3.
 
+        Args:
+            file_data: Bytes do arquivo
+            s3_key: Chave S3 (caminho)
+            content_type: MIME type
+            metadata: Metadados customizados
 
-async def upload_image(project_id: str, image_data: bytes, filename: str) -> dict[str, Any]:
-    """Faz upload de imagem para S3."""
-    extension = filename.rsplit(".", 1)[-1].lower() if "." in filename else "jpg"
-    s3_key = _generate_s3_key(project_id, extension)
-    md5_key = f"{s3_key}.md5"
-    
-    compressed = _compress_image(image_data)
-    md5_hash = _calculate_md5(compressed)
-    
-    session = aioboto3.Session()
-    async with session.client("s3", endpoint_url=settings.aws_endpoint) as s3:
-        await s3.put_object(
-            Bucket=settings.s3_bucket,
-            Key=s3_key,
-            Body=compressed,
-            ContentType=f"image/{extension}",
-            Metadata={"md5": md5_hash},
-        )
-        
-        await s3.put_object(
-            Bucket=settings.s3_bucket,
-            Key=md5_key,
-            Body=md5_hash.encode(),
-            ContentType="text/plain",
-        )
-    
-    return {"s3_key": s3_key, "md5_key": md5_key, "md5_hash": md5_hash}
+        Returns:
+            Dict com informações do upload
+        """
+        try:
+            async with self.session.client("s3", endpoint_url=self.endpoint_url) as s3:
+                await s3.put_object(
+                    Bucket=self.bucket_name,
+                    Key=s3_key,
+                    Body=file_data,
+                    ContentType=content_type,
+                    Metadata=metadata or {},
+                )
 
+            logger.info("s3_upload_sucesso", s3_key=s3_key, size=len(file_data))
 
-async def generate_presigned_url(filename: str, expires_in: int = 3600) -> dict[str, Any]:
-    """Gera URL pré-assinada para upload."""
-    session = aioboto3.Session()
-    async with session.client("s3", endpoint_url=settings.aws_endpoint) as s3:
-        url = await s3.generate_presigned_url(
-            ClientMethod="put_object",
-            Params={"Bucket": settings.s3_bucket, "Key": filename},
-            ExpiresIn=expires_in,
-        )
-    return {"upload_url": url, "s3_key": filename}
+            return {
+                "bucket": self.bucket_name,
+                "key": s3_key,
+                "size": len(file_data),
+                "url": f"s3://{self.bucket_name}/{s3_key}",
+            }
+
+        except ClientError as e:
+            logger.error("erro_s3_upload", error=str(e), s3_key=s3_key)
+            raise
+
+    async def download_file(self, s3_key: str) -> bytes:
+        """
+        Baixa arquivo do S3.
+
+        Args:
+            s3_key: Chave S3 do arquivo
+
+        Returns:
+            Bytes do arquivo
+        """
+        try:
+            async with self.session.client("s3", endpoint_url=self.endpoint_url) as s3:
+                response = await s3.get_object(Bucket=self.bucket_name, Key=s3_key)
+                data = await response["Body"].read()
+
+            logger.info("s3_download_sucesso", s3_key=s3_key, size=len(data))
+            return data
+
+        except ClientError as e:
+            logger.error("erro_s3_download", error=str(e), s3_key=s3_key)
+            raise
+
+    async def delete_file(self, s3_key: str) -> bool:
+        """Deleta arquivo do S3."""
+        try:
+            async with self.session.client("s3", endpoint_url=self.endpoint_url) as s3:
+                await s3.delete_object(Bucket=self.bucket_name, Key=s3_key)
+
+            logger.info("s3_delete_sucesso", s3_key=s3_key)
+            return True
+
+        except ClientError as e:
+            logger.error("erro_s3_delete", error=str(e), s3_key=s3_key)
+            return False
+
+    async def list_files(self, prefix: str = "", max_keys: int = 1000) -> list[dict]:
+        """Lista arquivos no S3."""
+        try:
+            async with self.session.client("s3", endpoint_url=self.endpoint_url) as s3:
+                response = await s3.list_objects_v2(
+                    Bucket=self.bucket_name, Prefix=prefix, MaxKeys=max_keys
+                )
+
+            files = []
+            for obj in response.get("Contents", []):
+                files.append(
+                    {
+                        "key": obj["Key"],
+                        "size": obj["Size"],
+                        "last_modified": obj["LastModified"].isoformat(),
+                    }
+                )
+
+            logger.info("s3_list_sucesso", prefix=prefix, count=len(files))
+            return files
+
+        except ClientError as e:
+            logger.error("erro_s3_list", error=str(e), prefix=prefix)
+            return []
+
+    async def generate_presigned_url(
+        self, s3_key: str, expiration: int = 3600, method: str = "get_object"
+    ) -> str:
+        """Gera URL pré-assinada."""
+        try:
+            async with self.session.client("s3", endpoint_url=self.endpoint_url) as s3:
+                url = await s3.generate_presigned_url(
+                    ClientMethod=method,
+                    Params={"Bucket": self.bucket_name, "Key": s3_key},
+                    ExpiresIn=expiration,
+                )
+
+            logger.info("presigned_url_gerada", s3_key=s3_key, expiration=expiration)
+            return url
+
+        except ClientError as e:
+            logger.error("erro_presigned_url", error=str(e), s3_key=s3_key)
+            raise
+
+    async def file_exists(self, s3_key: str) -> bool:
+        """Verifica se arquivo existe."""
+        try:
+            async with self.session.client("s3", endpoint_url=self.endpoint_url) as s3:
+                await s3.head_object(Bucket=self.bucket_name, Key=s3_key)
+            return True
+
+        except ClientError:
+            return False

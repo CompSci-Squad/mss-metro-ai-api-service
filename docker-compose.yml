@@ -7,10 +7,9 @@ services:
     ports:
       - "4566:4566"
     environment:
-      - SERVICES=s3,sqs,lambda
+      - SERVICES=s3,dynamodb,logs
       - DOCKER_HOST=unix:///var/run/docker.sock
-      - LAMBDA_EXECUTOR=docker
-      - LAMBDA_DOCKER_NETWORK=mss-metro-ai_default
+      - DEBUG=1
     volumes:
       - "./scripts/localstack:/etc/localstack/init/ready.d"
       - "/var/run/docker.sock:/var/run/docker.sock"
@@ -37,11 +36,25 @@ services:
       - "OPENSEARCH_JAVA_OPTS=-Xms512m -Xmx512m"
       - plugins.security.disabled=true
       - DISABLE_INSTALL_DEMO_CONFIG=true
+      - bootstrap.memory_lock=true
+      - "OPENSEARCH_INITIAL_ADMIN_PASSWORD=Admin@123"  # Requerido na v2.11+
     ports:
       - "9200:9200"
       - "9600:9600"
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+      nofile:
+        soft: 65536
+        hard: 65536
     volumes:
       - opensearch-data:/usr/share/opensearch/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:9200 || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
     networks:
       - default
 
@@ -53,31 +66,33 @@ services:
     ports:
       - "8000:8000"
     environment:
+      # AWS/S3
       - AWS_ENDPOINT=http://localstack:4566
+      - S3_ENDPOINT_URL=http://localstack:4566
       - AWS_ACCESS_KEY_ID=test
       - AWS_SECRET_ACCESS_KEY=test
       - AWS_DEFAULT_REGION=us-east-1
-      - S3_BUCKET=mss-metro-images
-      - SQS_QUEUE_URL=http://localstack:4566/000000000000/image-processing
+      - AWS_REGION=us-east-1
+      - S3_BUCKET=virag-bim-storage
+      # DynamoDB (via LocalStack)
+      - DYNAMODB_ENDPOINT_URL=http://localstack:4566
+      # Redis
       - REDIS_HOST=redis
       - REDIS_PORT=6379
-      - REDIS_URL=redis://redis:6379/0
-      - CELERY_BROKER_URL=redis://redis:6379/0
-      - CELERY_RESULT_BACKEND=redis://redis:6379/0
+      - CACHE_TTL=3600
+      # OpenSearch
       - OPENSEARCH_HOST=opensearch
       - OPENSEARCH_PORT=9200
-      - OPENSEARCH_USER=admin
-      - OPENSEARCH_PASSWORD=admin
-      - OPENSEARCH_INDEX=image-embeddings
+      - OPENSEARCH_HOSTS=["http://opensearch:9200"]
       - OPENSEARCH_USE_SSL=false
       - OPENSEARCH_VERIFY_CERTS=false
+      # VLM Models
       - VLM_MODEL_NAME=Salesforce/blip2-opt-2.7b
       - VLM_MODEL_CACHE_DIR=/app/models
       - EMBEDDING_MODEL_NAME=sentence-transformers/clip-ViT-B-32
       - USE_QUANTIZATION=true
       - DEVICE=cpu
       - MAX_IMAGE_SIZE=1024
-      - CACHE_TTL=3600
     volumes:
       - model-cache:/app/models
     depends_on:
@@ -87,46 +102,6 @@ services:
     networks:
       - default
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000
-
-  celery-worker:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    container_name: celery-worker
-    environment:
-      - AWS_ENDPOINT=http://localstack:4566
-      - AWS_ACCESS_KEY_ID=test
-      - AWS_SECRET_ACCESS_KEY=test
-      - AWS_DEFAULT_REGION=us-east-1
-      - S3_BUCKET=mss-metro-images
-      - REDIS_HOST=redis
-      - REDIS_PORT=6379
-      - REDIS_URL=redis://redis:6379/0
-      - CELERY_BROKER_URL=redis://redis:6379/0
-      - CELERY_RESULT_BACKEND=redis://redis:6379/0
-      - OPENSEARCH_HOST=opensearch
-      - OPENSEARCH_PORT=9200
-      - OPENSEARCH_USER=admin
-      - OPENSEARCH_PASSWORD=admin
-      - OPENSEARCH_INDEX=image-embeddings
-      - OPENSEARCH_USE_SSL=false
-      - OPENSEARCH_VERIFY_CERTS=false
-      - VLM_MODEL_NAME=Salesforce/blip2-opt-2.7b
-      - VLM_MODEL_CACHE_DIR=/app/models
-      - EMBEDDING_MODEL_NAME=sentence-transformers/clip-ViT-B-32
-      - USE_QUANTIZATION=true
-      - DEVICE=cpu
-      - MAX_IMAGE_SIZE=1024
-      - CACHE_TTL=3600
-    volumes:
-      - model-cache:/app/models
-    depends_on:
-      - localstack
-      - redis
-      - opensearch
-    networks:
-      - default
-    command: celery -A app.celery_app worker --loglevel=info --concurrency=2
 
 volumes:
   localstack-data:
