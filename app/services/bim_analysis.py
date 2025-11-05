@@ -21,10 +21,6 @@ class BIMAnalysisService:
     async def _generate_image_embedding(self, image_bytes: bytes) -> list[float]:
         """Gera embedding da imagem usando CLIP."""
         try:
-            from PIL import Image
-            import io
-
-            image = Image.open(io.BytesIO(image_bytes))
             embedding = await self.embedding_service.generate_image_embedding(image_bytes)
 
             logger.info("image_embedding_gerado", embedding_dim=len(embedding))
@@ -98,13 +94,23 @@ class BIMAnalysisService:
                 total_elements=project_data.get("total_elements"),
             )
 
-            # 1. Gera descrição da imagem usando VLM
-            description = await self._generate_image_description(image_bytes, context)
+            # 1. Gera embedding da imagem (ANTES da descrição para usar como contexto RAG)
+            image_embedding = await self._generate_image_embedding(image_bytes)
 
-            # 2. Gera embedding da descrição
+            # 2. Busca contexto RAG usando embedding da imagem (elementos esperados)
+            rag_context = await self._fetch_rag_context(
+                image_embedding,
+                project_data.get("project_id"),
+                top_k=5
+            )
+
+            # 3. Gera descrição da imagem usando VLM + contexto RAG (reduz alucinações)
+            description = await self._generate_image_description(image_bytes, context, rag_context)
+
+            # 4. Gera embedding da descrição
             description_embedding = await self.embedding_service.generate_embedding(description)
 
-            # 3. Busca elementos similares usando OpenSearch (busca vetorial)
+            # 5. Busca elementos similares usando OpenSearch (busca vetorial)
             vector_matches = await self._find_similar_elements_vector(
                 project_data.get("project_id"),
                 description_embedding,
@@ -147,25 +153,45 @@ class BIMAnalysisService:
             logger.error("erro_analise_bim", error=str(e), exc_info=True)
             raise
 
-    async def _generate_image_description(self, image_bytes: bytes, context: str | None = None) -> str:
-        """Gera descrição textual da imagem usando VLM."""
+    async def _generate_image_description(self, image_bytes: bytes, context: str | None = None, rag_context: dict | None = None) -> str:
+        """Gera descrição textual da imagem usando VLM com contexto RAG."""
         try:
-            prompt = """Analyze this construction site image in detail. Focus on:
-            1. Structural elements visible (walls, columns, slabs, beams, foundations)
-            2. Construction progress and completion status
-            3. Materials and building techniques visible
-            4. Any deviations, quality issues, or safety concerns
-            5. Overall construction phase
+            # Constrói prompt com RAG context para reduzir alucinações
+            prompt = """You are a BIM construction analyst. Analyze ONLY what you can clearly see in the image.
 
-            Provide a detailed technical description."""
+RULES:
+- Only describe elements that are VISIBLY PRESENT in the image
+- Do NOT infer or assume elements that are not clearly visible
+- Use SPECIFIC measurements and quantities when visible
+- Focus on structural elements: walls, columns, slabs, beams, foundations
+- Indicate construction status: completed, in-progress, or not started
+"""
+
+            # Adiciona contexto RAG (elementos esperados do BIM)
+            if rag_context and rag_context.get("elements"):
+                prompt += "\n\nEXPECTED ELEMENTS (from BIM model):\n"
+                for elem in rag_context["elements"][:5]:  # Top 5 mais relevantes
+                    prompt += f"- {elem.get('element_type')}: {elem.get('element_name', 'N/A')} - {elem.get('description', '')}\n"
+                prompt += "\nOnly mention these elements if you can CLEARLY identify them in the image.\n"
+
+            # Few-shot examples para guiar formato de resposta
+            prompt += """\n\nEXAMPLE OUTPUT FORMAT:
+"The image shows 3 reinforced concrete columns in the foundation phase. Two columns appear completed with visible rebar ties. One column is partially constructed, approximately 60% complete. The foundation slab is visible beneath, fully poured and cured. No walls or beams are visible in this view."
+
+Now analyze the provided construction image:"""
 
             if context:
                 prompt += f"\n\nAdditional context: {context}"
 
             # Usa VLMService existente
-            description = await self.vlm_service.generate_caption(image_bytes, prompt)
+            description = await self.vlm.generate_caption(image_bytes, prompt)
 
-            logger.info("descricao_gerada", length=len(description))
+            # Post-processing: remove respostas muito genéricas
+            if len(description) < 30:
+                logger.warning("descricao_muito_curta", length=len(description))
+                description += " [Low confidence - insufficient detail]"
+
+            logger.info("descricao_gerada", length=len(description), has_rag_context=bool(rag_context))
             return description
 
         except Exception as e:

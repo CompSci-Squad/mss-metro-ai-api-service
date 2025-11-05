@@ -3,7 +3,8 @@ import os
 from fastapi import FastAPI
 
 from app.core.container import Container
-from app.routes import bim, health
+from app.routes import health
+from app.routes.bim import router as bim_router
 
 # Inicializa container DI
 container = Container()
@@ -47,4 +48,4 @@ async def startup_event():
 
 
 app.include_router(health.router, tags=["health"])
-app.include_router(bim.router, tags=["VIRAG-BIM"])
+app.include_router(bim_router)

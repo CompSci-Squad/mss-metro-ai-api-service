@@ -20,7 +20,11 @@ class Container(containers.DeclarativeContainer):
 
     wiring_config = containers.WiringConfiguration(
         modules=[
-            "app.routes.bim",
+            "app.routes.bim.projects",
+            "app.routes.bim.analysis",
+            "app.routes.bim.progress",
+            "app.routes.bim.comparison",
+            "app.routes.bim.alerts",
             "app.routes.health",
         ]
     )
