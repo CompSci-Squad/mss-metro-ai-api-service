@@ -25,6 +25,7 @@ logger = structlog.get_logger(__name__)
 
 class ConfidenceLevel(str):
     """Níveis de confiança permitidos."""
+
     HIGH = "HIGH"
     MEDIUM = "MEDIUM"
     LOW = "LOW"
@@ -32,6 +33,7 @@ class ConfidenceLevel(str):
 
 class ConstructionStatus(str):
     """Status de construção permitidos."""
+
     COMPLETED = "completed"
     IN_PROGRESS = "in_progress"
     NOT_STARTED = "not_started"
@@ -49,20 +51,18 @@ class DetectedElement(BaseModel):
     visible_percentage: Optional[int] = Field(
         None, ge=0, le=100, description="Percentual visível do elemento na imagem (0-100)"
     )
-    uncertainty_notes: Optional[str] = Field(
-        None, description="Notas sobre incertezas na identificação"
-    )
+    uncertainty_notes: Optional[str] = Field(None, description="Notas sobre incertezas na identificação")
 
-    @validator('confidence')
+    @validator("confidence")
     def validate_confidence(cls, v):
-        allowed = ['HIGH', 'MEDIUM', 'LOW']
+        allowed = ["HIGH", "MEDIUM", "LOW"]
         if v.upper() not in allowed:
             raise ValueError(f"Confidence must be one of {allowed}")
         return v.upper()
 
-    @validator('status')
+    @validator("status")
     def validate_status(cls, v):
-        allowed = ['completed', 'in_progress', 'not_started', 'not_visible']
+        allowed = ["completed", "in_progress", "not_started", "not_visible"]
         if v.lower() not in allowed:
             raise ValueError(f"Status must be one of {allowed}")
         return v.lower()
@@ -75,49 +75,30 @@ class ViewingConditions(BaseModel):
     lighting_quality: str = Field(description="Qualidade da iluminação (excellent, good, poor)")
     image_clarity: str = Field(description="Clareza da imagem (excellent, good, acceptable, poor)")
     obstructions: list[str] = Field(
-        default_factory=list, 
-        description="Obstruções visíveis (andaimes, equipamentos, etc)"
+        default_factory=list, description="Obstruções visíveis (andaimes, equipamentos, etc)"
     )
-    occluded_areas: list[str] = Field(
-        default_factory=list,
-        description="Áreas ocluídas ou não visíveis"
-    )
+    occluded_areas: list[str] = Field(default_factory=list, description="Áreas ocluídas ou não visíveis")
 
 
 class StructuredVLMOutput(BaseModel):
     """Output estruturado completo da análise VLM para BIM."""
 
-    viewing_conditions: ViewingConditions = Field(
-        description="Condições de visualização e limitações"
-    )
+    viewing_conditions: ViewingConditions = Field(description="Condições de visualização e limitações")
     elements_detected: list[DetectedElement] = Field(
         default_factory=list, description="Lista de elementos estruturais detectados"
     )
-    construction_phase: str = Field(
-        description="Fase da construção (foundation, structure, finishing, completed)"
-    )
-    overall_quality: str = Field(
-        description="Qualidade geral observada (excellent, good, acceptable, poor)"
-    )
+    construction_phase: str = Field(description="Fase da construção (foundation, structure, finishing, completed)")
+    overall_quality: str = Field(description="Qualidade geral observada (excellent, good, acceptable, poor)")
     visible_issues: list[str] = Field(
-        default_factory=list, 
-        description="Problemas ou desvios visíveis (fissuras, desalinhamentos, etc)"
+        default_factory=list, description="Problemas ou desvios visíveis (fissuras, desalinhamentos, etc)"
     )
-    safety_concerns: list[str] = Field(
-        default_factory=list,
-        description="Preocupações de segurança observadas"
-    )
+    safety_concerns: list[str] = Field(default_factory=list, description="Preocupações de segurança observadas")
     bim_elements_not_visible: list[str] = Field(
-        default_factory=list,
-        description="Elementos esperados do BIM que não são visíveis na imagem"
+        default_factory=list, description="Elementos esperados do BIM que não são visíveis na imagem"
     )
-    confidence_score: float = Field(
-        ge=0.0, le=1.0, 
-        description="Score de confiança geral da análise (0.0 a 1.0)"
-    )
+    confidence_score: float = Field(ge=0.0, le=1.0, description="Score de confiança geral da análise (0.0 a 1.0)")
     analysis_limitations: list[str] = Field(
-        default_factory=list,
-        description="Limitações da análise devido a condições de visualização"
+        default_factory=list, description="Limitações da análise devido a condições de visualização"
     )
 
     class Config:
@@ -128,7 +109,7 @@ class StructuredVLMOutput(BaseModel):
                     "lighting_quality": "good",
                     "image_clarity": "good",
                     "obstructions": ["scaffolding on right side"],
-                    "occluded_areas": ["foundation level", "interior spaces"]
+                    "occluded_areas": ["foundation level", "interior spaces"],
                 },
                 "elements_detected": [
                     {
@@ -137,7 +118,7 @@ class StructuredVLMOutput(BaseModel):
                         "confidence": "HIGH",
                         "status": "completed",
                         "description": "Reinforced concrete column, fully constructed",
-                        "visible_percentage": 90
+                        "visible_percentage": 90,
                     }
                 ],
                 "construction_phase": "structure",
@@ -146,7 +127,7 @@ class StructuredVLMOutput(BaseModel):
                 "safety_concerns": [],
                 "bim_elements_not_visible": ["W-105"],
                 "confidence_score": 0.85,
-                "analysis_limitations": ["Cannot assess interior elements"]
+                "analysis_limitations": ["Cannot assess interior elements"],
             }
         }
 
@@ -190,7 +171,9 @@ Examples:
         if rag_context and rag_context.get("elements"):
             prompt += "\n\nEXPECTED ELEMENTS FROM BIM MODEL (Reference Only):\n"
             for elem in rag_context["elements"][:5]:
-                prompt += f"- {elem.get('element_type')}: {elem.get('element_name', 'N/A')} - {elem.get('description', '')}\n"
+                prompt += (
+                    f"- {elem.get('element_type')}: {elem.get('element_name', 'N/A')} - {elem.get('description', '')}\n"
+                )
             prompt += "\nIMPORTANT: Only report these elements if they are VISUALLY CONFIRMED in the current image. Expected elements not visible should be listed separately.\n"
 
         prompt += """
@@ -412,9 +395,7 @@ class HallucinationMitigator:
             logger.error("consistency_check_failed", error=str(e))
             return {"consistent": None, "similarity": None, "check_performed": False, "error": str(e)}
 
-    async def verify_against_bim(
-        self, vlm_elements: list[dict], project_id: str, opensearch_client=None
-    ) -> dict:
+    async def verify_against_bim(self, vlm_elements: list[dict], project_id: str, opensearch_client=None) -> dict:
         """
         Verifica se elementos descritos pela VLM existem no modelo BIM.
 
@@ -468,9 +449,7 @@ class HallucinationMitigator:
                 logger.error("bim_verification_error", element_type=element_type, error=str(e))
                 verified_elements.append({**elem, "verified": None, "error": str(e)})
 
-        hallucination_rate = (
-            len(hallucinated_elements) / len(vlm_elements) if vlm_elements else 0.0
-        )
+        hallucination_rate = len(hallucinated_elements) / len(vlm_elements) if vlm_elements else 0.0
 
         return {
             "verification_performed": True,
@@ -482,9 +461,7 @@ class HallucinationMitigator:
             "hallucinated_elements": hallucinated_elements,
         }
 
-    async def self_consistency_aggregation(
-        self, descriptions: list[str], consensus_threshold: float = 0.5
-    ) -> dict:
+    async def self_consistency_aggregation(self, descriptions: list[str], consensus_threshold: float = 0.5) -> dict:
         """
         Agrega múltiplas respostas VLM usando votação por maioria.
 
@@ -636,7 +613,9 @@ class HallucinationMetrics:
             "precision": round(HallucinationMetrics.calculate_precision(detected_elements, ground_truth), 3),
             "recall": round(HallucinationMetrics.calculate_recall(detected_elements, ground_truth), 3),
             "f1_score": round(HallucinationMetrics.calculate_f1_score(detected_elements, ground_truth), 3),
-            "hallucination_rate": round(HallucinationMetrics.calculate_hallucination_rate(detected_elements, ground_truth), 3),
+            "hallucination_rate": round(
+                HallucinationMetrics.calculate_hallucination_rate(detected_elements, ground_truth), 3
+            ),
             "total_detected": len(detected_elements),
             "total_ground_truth": len(ground_truth),
             "true_positives": len(set(detected_elements) & set(ground_truth)),

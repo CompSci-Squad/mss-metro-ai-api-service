@@ -98,11 +98,7 @@ class BIMAnalysisService:
             image_embedding = await self._generate_image_embedding(image_bytes)
 
             # 2. Busca contexto RAG usando embedding da imagem (elementos esperados)
-            rag_context = await self._fetch_rag_context(
-                image_embedding,
-                project_data.get("project_id"),
-                top_k=5
-            )
+            rag_context = await self._fetch_rag_context(image_embedding, project_data.get("project_id"), top_k=5)
 
             # 3. Gera descrição da imagem usando VLM + contexto RAG (reduz alucinações)
             description = await self._generate_image_description(image_bytes, context, rag_context)
@@ -153,7 +149,9 @@ class BIMAnalysisService:
             logger.error("erro_analise_bim", error=str(e), exc_info=True)
             raise
 
-    async def _generate_image_description(self, image_bytes: bytes, context: str | None = None, rag_context: dict | None = None) -> str:
+    async def _generate_image_description(
+        self, image_bytes: bytes, context: str | None = None, rag_context: dict | None = None
+    ) -> str:
         """Gera descrição textual da imagem usando VLM com contexto RAG."""
         try:
             # Constrói prompt com RAG context para reduzir alucinações

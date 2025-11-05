@@ -57,7 +57,7 @@ class VLMStructuredOutput:
 
     async def _generate(self, image_bytes: bytes, prompt: str) -> str:
         import io
-        
+
         image = Image.open(io.BytesIO(image_bytes)).convert("RGB")
         inputs = self.vlm.processor(image, text=prompt, return_tensors="pt")
 
@@ -71,7 +71,7 @@ class VLMStructuredOutput:
 
     def _parse_json(self, output: str) -> StructuredVLMOutput | None:
         try:
-            json_match = re.search(r'\{.*\}', output, re.DOTALL)
+            json_match = re.search(r"\{.*\}", output, re.DOTALL)
             if not json_match:
                 return None
 
