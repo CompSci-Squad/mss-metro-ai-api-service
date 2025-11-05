@@ -83,7 +83,7 @@ async def store_image(
         "text_description": text_description or "",
         "metadata": metadata or {},
     }
-    
+
     response = _get_client().index(index=_index, id=image_id, body=doc)
     logger.info("image_stored", image_id=image_id)
     return response
@@ -113,7 +113,7 @@ async def search_similar(
             }
         },
     }
-    
+
     response = _get_client().search(index=_index, body=query)
     return [hit["_source"] for hit in response["hits"]["hits"]]
 
@@ -128,7 +128,7 @@ async def get_project_images(
         "query": {"term": {"project_id": project_id}},
         "sort": [{"sequence_number": {"order": "asc"}}],
     }
-    
+
     response = _get_client().search(index=_index, body=query)
     return [hit["_source"] for hit in response["hits"]["hits"]]
 
@@ -148,7 +148,7 @@ async def get_by_sequence(
             }
         }
     }
-    
+
     response = _get_client().search(index=_index, body=query)
     hits = response["hits"]["hits"]
     return hits[0]["_source"] if hits else None

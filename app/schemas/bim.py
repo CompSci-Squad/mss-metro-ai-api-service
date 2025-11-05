@@ -1,20 +1,10 @@
-"""
-Schemas Pydantic para VIRAG-BIM.
-Sistema de Monitoramento Automatizado de Obras do Metrô de São Paulo.
-"""
-
 from datetime import datetime
 from enum import Enum
 
 from pydantic import BaseModel, Field
 
 
-# ==================== Enums ====================
-
-
 class ProgressStatus(str, Enum):
-    """Status do progresso da obra."""
-
     NOT_STARTED = "not_started"
     IN_PROGRESS = "in_progress"
     COMPLETED = "completed"
@@ -23,8 +13,6 @@ class ProgressStatus(str, Enum):
 
 
 class AlertSeverity(str, Enum):
-    """Severidade do alerta."""
-
     LOW = "low"
     MEDIUM = "medium"
     HIGH = "high"
@@ -32,16 +20,11 @@ class AlertSeverity(str, Enum):
 
 
 class AlertType(str, Enum):
-    """Tipo de alerta."""
-
     DELAY = "delay"
     DEVIATION = "deviation"
     QUALITY_ISSUE = "quality_issue"
     SAFETY_CONCERN = "safety_concern"
     MISSING_ELEMENT = "missing_element"
-
-
-# ==================== IFC/Project Schemas ====================
 
 
 class IFCElement(BaseModel):
@@ -50,9 +33,7 @@ class IFCElement(BaseModel):
     element_id: str = Field(..., description="ID único do elemento IFC (GlobalId)")
     element_type: str = Field(..., description="Tipo (Wall, Slab, Column, etc.)")
     name: str | None = Field(None, description="Nome do elemento")
-    properties: dict[str, str | int | float] = Field(
-        default_factory=dict, description="Propriedades do elemento"
-    )
+    properties: dict[str, str | int | float] = Field(default_factory=dict, description="Propriedades do elemento")
     geometry: dict[str, bool] | None = Field(None, description="Informações geométricas")
     scheduled_date: datetime | None = Field(None, description="Data prevista de execução")
 
@@ -90,16 +71,11 @@ class BIMProject(BaseModel):
     updated_at: datetime
 
 
-# ==================== Analysis Schemas ====================
-
-
 class AnalysisRequest(BaseModel):
     """Request para análise de imagem da obra."""
 
     project_id: str = Field(..., description="ID do projeto BIM")
-    element_ids: list[str] | None = Field(
-        None, description="IDs específicos de elementos para análise"
-    )
+    element_ids: list[str] | None = Field(None, description="IDs específicos de elementos para análise")
     context: str | None = Field(None, description="Contexto adicional (localização, fase)")
     capture_date: datetime | None = Field(None, description="Data de captura da imagem")
 
@@ -115,18 +91,41 @@ class DetectedElement(BaseModel):
     deviation: str | None = Field(None, description="Desvio identificado")
 
 
+class ElementChange(BaseModel):
+    """Representa mudança em um elemento entre análises."""
+
+    element_id: str = Field(..., description="ID do elemento")
+    element_type: str = Field(..., description="Tipo do elemento")
+    change_type: str = Field(..., description="Tipo de mudança: 'new', 'removed', 'progress', 'status_change'")
+    previous_status: ProgressStatus | None = Field(None, description="Status anterior")
+    current_status: ProgressStatus | None = Field(None, description="Status atual")
+    description: str = Field(..., description="Descrição da mudança")
+
+
+class AnalysisComparison(BaseModel):
+    """Comparação entre análise atual e anterior."""
+
+    previous_analysis_id: str = Field(..., description="ID da análise anterior")
+    previous_timestamp: datetime = Field(..., description="Data da análise anterior")
+    progress_change: float = Field(..., description="Mudança percentual no progresso")
+    elements_added: list[ElementChange] = Field(default_factory=list, description="Elementos novos")
+    elements_removed: list[ElementChange] = Field(default_factory=list, description="Elementos removidos")
+    elements_changed: list[ElementChange] = Field(default_factory=list, description="Elementos com mudança de status")
+    summary: str = Field(..., description="Resumo da comparação gerado pela VLM")
+
+
 class ConstructionAnalysis(BaseModel):
     """Resultado da análise de uma imagem de obra."""
 
     analysis_id: str = Field(..., description="ID único da análise")
     project_id: str = Field(..., description="ID do projeto")
     image_s3_key: str = Field(..., description="Chave da imagem no S3")
-    detected_elements: list[DetectedElement] = Field(
-        default_factory=list, description="Elementos detectados"
-    )
+    image_description: str | None = Field(None, description="Descrição da imagem fornecida pelo usuário")
+    detected_elements: list[DetectedElement] = Field(default_factory=list, description="Elementos detectados")
     overall_progress: float = Field(..., ge=0.0, le=100.0, description="Progresso geral (%)")
     summary: str = Field(..., description="Resumo textual da análise")
     alerts: list[str] = Field(default_factory=list, description="Alertas identificados")
+    comparison: AnalysisComparison | None = Field(None, description="Comparação com análise anterior")
     analyzed_at: datetime = Field(default_factory=datetime.utcnow)
     processing_time: float = Field(..., description="Tempo de processamento em segundos")
 
@@ -138,9 +137,6 @@ class AnalysisResponse(BaseModel):
     status: str = Field(default="completed", description="Status da análise")
     result: ConstructionAnalysis
     message: str = Field(default="Análise concluída com sucesso")
-
-
-# ==================== Alert Schemas ====================
 
 
 class Alert(BaseModel):
@@ -160,9 +156,6 @@ class Alert(BaseModel):
     resolved_by: str | None = Field(None, description="Usuário que resolveu")
 
 
-# ==================== Results Schemas ====================
-
-
 class ProjectProgress(BaseModel):
     """Response com progresso e histórico de um projeto."""
 
@@ -174,3 +167,23 @@ class ProjectProgress(BaseModel):
     recent_alerts: list[Alert] = Field(default_factory=list)
     overall_progress: float = Field(description="Progresso médio geral do projeto")
     last_analysis_date: datetime | None = None
+
+
+class AlertListResponse(BaseModel):
+    """Response para listagem de alertas."""
+
+    project_id: str
+    total_alerts: int
+    open_alerts: int
+    resolved_alerts: int
+    alerts: list[Alert]
+
+
+class AnalysisListResponse(BaseModel):
+    """Response para listagem de análises/relatórios."""
+
+    project_id: str
+    project_name: str
+    total_reports: int
+    reports: list[ConstructionAnalysis]
+    latest_progress: float | None = None

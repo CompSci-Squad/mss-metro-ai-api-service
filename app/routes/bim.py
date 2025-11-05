@@ -1,7 +1,4 @@
-"""
-Rotas da API para VIRAG-BIM usando ORMs (PynamoDB + OpenSearch-DSL).
-Endpoints para upload de IFC, análise de imagens e consulta de resultados.
-"""
+"""Rotas VIRAG-BIM."""
 
 import time
 from typing import Annotated
@@ -14,18 +11,72 @@ from ulid import ULID
 
 from app.clients.s3 import S3Client
 from app.core.container import Container
+from app.core.settings import get_settings
+from app.core.validators import (
+    validate_file_extension,
+    validate_file_size,
+    validate_project_name,
+    validate_ulid,
+)
 from app.models.dynamodb import AlertModel, BIMProject, ConstructionAnalysisModel
 from app.schemas.bim import AlertSeverity, AlertType, AnalysisResponse, ConstructionAnalysis, IFCUploadResponse
 from app.services.bim_analysis import BIMAnalysisService
-from app.services.embedding_service import EmbeddingService
 from app.services.ifc_processor import IFCProcessorService
-from app.services.vlm_service import VLMService
 
 router = APIRouter(prefix="/bim", tags=["VIRAG-BIM"])
 logger = structlog.get_logger(__name__)
 
 
-# ==================== Upload de IFC ====================
+async def _save_alerts(
+    project_id: str,
+    analysis_id: str,
+    alerts_text: list[str],
+    detected_elements: list[dict],
+) -> int:
+    saved_count = 0
+
+    for alert_text in alerts_text:
+        try:
+            alert_type = AlertType.DEVIATION
+            severity = AlertSeverity.MEDIUM
+
+            text_lower = alert_text.lower()
+
+            if any(word in text_lower for word in ["missing", "faltando", "ausente", "não detectado"]):
+                alert_type = AlertType.MISSING_ELEMENT
+            elif any(word in text_lower for word in ["delay", "atraso", "atrasado"]):
+                alert_type = AlertType.DELAY
+            elif any(word in text_lower for word in ["quality", "qualidade", "defeito"]):
+                alert_type = AlertType.QUALITY_ISSUE
+            elif any(word in text_lower for word in ["safety", "segurança", "risco"]):
+                alert_type = AlertType.SAFETY_CONCERN
+                severity = AlertSeverity.HIGH
+
+            if any(word in text_lower for word in ["critical", "crítico", "urgente", "grave"]):
+                severity = AlertSeverity.CRITICAL
+            elif any(word in text_lower for word in ["high", "alto", "importante"]):
+                severity = AlertSeverity.HIGH
+            elif any(word in text_lower for word in ["low", "baixo", "menor"]):
+                severity = AlertSeverity.LOW
+
+            alert = AlertModel(
+                alert_id=str(ULID()),
+                project_id=project_id,
+                analysis_id=analysis_id,
+                alert_type=alert_type.value,
+                severity=severity.value,
+                title=f"{alert_type.value.replace('_', ' ').title()} detectado",
+                description=alert_text,
+            )
+            alert.save()
+            saved_count += 1
+
+        except Exception as e:
+            logger.warning("erro_salvar_alerta", error=str(e), alert_text=alert_text)
+            continue
+
+    logger.info("alertas_salvos", count=saved_count)
+    return saved_count
 
 
 @router.post("/upload-ifc", response_model=IFCUploadResponse, status_code=status.HTTP_201_CREATED)
@@ -36,37 +87,24 @@ async def upload_ifc_file(
     description: Annotated[str | None, Form(description="Descrição do projeto")] = None,
     location: Annotated[str | None, Form(description="Localização da obra")] = None,
     s3_client: S3Client = Depends(Provide[Container.s3_client]),
-    embedding_service: EmbeddingService = Depends(Provide[Container.embedding_service]),
+    ifc_processor: IFCProcessorService = Depends(Provide[Container.ifc_processor]),
 ):
-    """
-    Upload e processamento de arquivo IFC usando PynamoDB ORM.
-
-    Processa o modelo BIM, extrai elementos e armazena no DynamoDB.
-    """
+    """Upload e processamento de arquivo IFC."""
     try:
         start_time = time.time()
+        settings = get_settings()
 
-        # Valida extensão
-        if not file.filename or not file.filename.lower().endswith(".ifc"):
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Arquivo deve ter extensão .ifc")
+        validate_file_extension(file.filename or "", [".ifc"])
+        validate_project_name(project_name)
+        file_content = await validate_file_size(file, settings.max_file_size_mb)
 
         logger.info("upload_ifc_iniciado", filename=file.filename, project_name=project_name)
 
-        # Lê conteúdo
-        file_content = await file.read()
-
-        # Processa IFC
-        ifc_processor = IFCProcessorService(embedding_service=embedding_service)
         processed_data = await ifc_processor.process_ifc_file(file_content)
-
-        # Gera ID do projeto
         project_id = str(ULID())
 
-        # Upload para S3
         s3_key = f"bim-projects/{project_id}/model.ifc"
         await s3_client.upload_file(file_content, s3_key, content_type="application/x-step")
-
-        # Salva no DynamoDB usando ORM
         project = BIMProject(
             project_id=project_id,
             project_name=project_name,
@@ -77,9 +115,8 @@ async def upload_ifc_file(
             elements=processed_data["elements"],
             project_info=processed_data["project_info"],
         )
-        project.save()  # ORM save!
+        project.save()
 
-        # Indexa embeddings no OpenSearch (ass\u00edncrono)
         indexed_count = await ifc_processor.index_elements_to_opensearch(
             project_id=project_id, elements=processed_data["elements"]
         )
@@ -89,7 +126,10 @@ async def upload_ifc_file(
         processing_time = time.time() - start_time
 
         logger.info(
-            "upload_ifc_concluido", project_id=project_id, total_elements=processed_data["total_elements"], processing_time=processing_time
+            "upload_ifc_concluido",
+            project_id=project_id,
+            total_elements=processed_data["total_elements"],
+            processing_time=processing_time,
         )
 
         return IFCUploadResponse(
@@ -107,34 +147,24 @@ async def upload_ifc_file(
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e)) from e
 
 
-# ==================== Análise de Imagem ====================
-
-
 @router.post("/analyze", response_model=AnalysisResponse, status_code=status.HTTP_200_OK)
 @inject
 async def analyze_construction_image(
     file: Annotated[UploadFile, File(description="Imagem da obra para análise")],
     project_id: Annotated[str, Form(description="ID do projeto BIM")],
+    image_description: Annotated[str | None, Form(description="Descrição da imagem (ex: fachada, estrutura)")] = None,
     context: Annotated[str | None, Form(description="Contexto adicional")] = None,
     s3_client: S3Client = Depends(Provide[Container.s3_client]),
-    vlm_service: VLMService = Depends(Provide[Container.vlm_service]),
-    embedding_service: EmbeddingService = Depends(Provide[Container.embedding_service]),
+    bim_service: BIMAnalysisService = Depends(Provide[Container.bim_analysis_service]),
 ):
-    """
-    Analisa imagem da obra usando PynamoDB ORM.
-
-    Utiliza VLM para identificar elementos, progresso e desvios.
-    """
+    """Analisa imagem da obra."""
     try:
-        # Valida extensão
-        if not file.filename:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Arquivo inválido")
+        settings = get_settings()
 
-        valid_extensions = [".jpg", ".jpeg", ".png", ".bmp", ".tiff"]
-        if not any(file.filename.lower().endswith(ext) for ext in valid_extensions):
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST, detail=f"Formato não suportado. Use: {', '.join(valid_extensions)}"
-            )
+        # Validações
+        validate_ulid(project_id)
+        validate_file_extension(file.filename or "", [".jpg", ".jpeg", ".png", ".bmp", ".tiff"])
+        image_bytes = await validate_file_size(file, settings.max_file_size_mb)
 
         logger.info("analise_iniciada", project_id=project_id, filename=file.filename)
 
@@ -142,7 +172,7 @@ async def analyze_construction_image(
         try:
             project = BIMProject.get(project_id)
         except DoesNotExist:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Projeto não encontrado")
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Projeto não encontrado") from None
 
         # Converte para dict para compatibilidade
         project_data = {
@@ -152,9 +182,6 @@ async def analyze_construction_image(
             "elements": project.elements,
         }
 
-        # Lê imagem
-        image_bytes = await file.read()
-
         # ID da análise
         analysis_id = str(ULID())
 
@@ -162,19 +189,51 @@ async def analyze_construction_image(
         image_s3_key = f"bim-projects/{project_id}/images/{analysis_id}.jpg"
         await s3_client.upload_file(image_bytes, image_s3_key, content_type="image/jpeg")
 
-        # Executa análise
-        bim_service = BIMAnalysisService(vlm_service, embedding_service)
-        analysis_result = await bim_service.analyze_construction_image(image_bytes=image_bytes, project_data=project_data, context=context)
+        # Executa análise VI-RAG completa
+        analysis_result = await bim_service.analyze_construction_image(
+            image_bytes=image_bytes,
+            project_data=project_data,
+            image_description=image_description,
+            context=context,
+        )
 
-        # Monta resultado
+        # Salva embedding da imagem no OpenSearch
+        try:
+            from app.models.opensearch import ImageAnalysisDocument
+            from datetime import datetime
+
+            img_doc = ImageAnalysisDocument(
+                analysis_id=analysis_id,
+                project_id=project_id,
+                image_s3_key=image_s3_key,
+                image_description=image_description or "",
+                overall_progress=str(analysis_result["overall_progress"]),
+                summary=analysis_result["summary"],
+                image_embedding=analysis_result["image_embedding"],
+                analyzed_at=datetime.utcnow(),
+            )
+            img_doc.save()
+            logger.info("embedding_imagem_salvo", analysis_id=analysis_id)
+        except Exception as e:
+            logger.warning("erro_salvar_embedding_imagem", error=str(e))
+
+        # Monta resultado com comparação
+        comparison_data = None
+        if analysis_result.get("comparison"):
+            from app.schemas.bim import AnalysisComparison
+
+            comparison_data = AnalysisComparison(**analysis_result["comparison"])
+
         result = ConstructionAnalysis(
             analysis_id=analysis_id,
             project_id=project_id,
             image_s3_key=image_s3_key,
+            image_description=image_description,
             detected_elements=analysis_result["detected_elements"],
             overall_progress=analysis_result["overall_progress"],
             summary=analysis_result["summary"],
             alerts=analysis_result["alerts"],
+            comparison=comparison_data,
             processing_time=analysis_result["processing_time"],
         )
 
@@ -183,29 +242,27 @@ async def analyze_construction_image(
             analysis_id=analysis_id,
             project_id=project_id,
             image_s3_key=image_s3_key,
+            image_description=image_description,
             overall_progress=analysis_result["overall_progress"],
             summary=analysis_result["summary"],
             detected_elements=analysis_result["detected_elements"],
             alerts=analysis_result["alerts"],
-            processing_time=analysis_result["processing_time"],
+            comparison=analysis_result.get("comparison"),
         )
         analysis_model.save()  # ORM save!
 
-        # Cria alertas se necessário
+        # Cria alertas estruturados se necessário
         if result.alerts:
-            for alert_text in result.alerts:
-                alert = AlertModel(
-                    alert_id=str(ULID()),
-                    project_id=project_id,
-                    analysis_id=analysis_id,
-                    alert_type=AlertType.MISSING_ELEMENT.value,
-                    severity=AlertSeverity.MEDIUM.value,
-                    title="Elemento não detectado",
-                    description=alert_text,
-                )
-                alert.save()  # ORM save!
+            await _save_alerts(
+                project_id=project_id,
+                analysis_id=analysis_id,
+                alerts_text=result.alerts,
+                detected_elements=result.detected_elements,
+            )
 
-        logger.info("analise_concluida", analysis_id=analysis_id, progress=result.overall_progress, alerts=len(result.alerts))
+        logger.info(
+            "analise_concluida", analysis_id=analysis_id, progress=result.overall_progress, alerts=len(result.alerts)
+        )
 
         return AnalysisResponse(analysis_id=analysis_id, result=result)
 
@@ -214,9 +271,6 @@ async def analyze_construction_image(
     except Exception as e:
         logger.error("erro_analise", error=str(e), exc_info=True)
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e)) from e
-
-
-# ==================== Consulta de Resultados ====================
 
 
 @router.get("/progress/{project_id}")
@@ -238,9 +292,7 @@ async def get_project_progress(project_id: str):
         analyses = list(ConstructionAnalysisModel.scan(ConstructionAnalysisModel.project_id == project_id))
 
         # Busca alertas não resolvidos
-        alerts = list(
-            AlertModel.scan((AlertModel.project_id == project_id) & ~AlertModel.resolved)
-        )
+        alerts = list(AlertModel.scan((AlertModel.project_id == project_id) & ~AlertModel.resolved))
 
         # Calcula progresso médio
         overall_progress = sum(a.overall_progress for a in analyses) / len(analyses) if analyses else 0.0
@@ -432,4 +484,167 @@ async def compare_analyses(project_id: str, analysis_ids: str):
         raise
     except Exception as e:
         logger.error("erro_comparar_analises", error=str(e), exc_info=True)
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e)) from e
+
+
+@router.get("/projects/{project_id}/alerts")
+async def list_project_alerts(project_id: str):
+    """
+    Lista todos os alertas de um projeto.
+
+    Retorna alertas abertos e resolvidos, ordenados por data de criação.
+    """
+    try:
+        validate_ulid(project_id)
+
+        logger.info("listando_alertas", project_id=project_id)
+
+        # Busca projeto para validar
+        try:
+            project = BIMProject.get(project_id)
+        except DoesNotExist:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Projeto não encontrado") from None
+
+        # Busca todos os alertas do projeto
+        alerts = list(
+            AlertModel.project_id_index.query(
+                project_id,
+                scan_index_forward=False,  # Mais recentes primeiro
+            )
+        )
+
+        # Separa alertas abertos e resolvidos
+        open_alerts = [a for a in alerts if not a.resolved]
+        resolved_alerts = [a for a in alerts if a.resolved]
+
+        # Converte para schema
+        from app.schemas.bim import Alert, AlertListResponse
+
+        alerts_data = [
+            Alert(
+                alert_id=a.alert_id,
+                project_id=a.project_id,
+                analysis_id=a.analysis_id,
+                alert_type=a.alert_type,
+                severity=a.severity,
+                title=a.title,
+                description=a.description,
+                element_id=a.element_id,
+                created_at=a.created_at,
+                resolved=a.resolved,
+                resolved_at=a.resolved_at,
+                resolved_by=a.resolved_by,
+            )
+            for a in alerts
+        ]
+
+        response = AlertListResponse(
+            project_id=project_id,
+            total_alerts=len(alerts),
+            open_alerts=len(open_alerts),
+            resolved_alerts=len(resolved_alerts),
+            alerts=alerts_data,
+        )
+
+        logger.info(
+            "alertas_listados",
+            project_id=project_id,
+            total=len(alerts),
+            open=len(open_alerts),
+        )
+
+        return response
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("erro_listar_alertas", error=str(e), exc_info=True)
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e)) from e
+
+
+@router.get("/projects/{project_id}/reports")
+async def list_project_reports(project_id: str, limit: int = 50):
+    """
+    Lista todas as análises/relatórios de um projeto.
+
+    Retorna histórico cronológico de análises com comparações.
+    """
+    try:
+        validate_ulid(project_id)
+
+        logger.info("listando_relatorios", project_id=project_id, limit=limit)
+
+        # Busca projeto
+        try:
+            project = BIMProject.get(project_id)
+        except DoesNotExist:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Projeto não encontrado") from None
+
+        # Busca análises do projeto
+        analyses = list(
+            ConstructionAnalysisModel.project_id_index.query(
+                project_id,
+                scan_index_forward=False,  # Mais recentes primeiro
+                limit=limit,
+            )
+        )
+
+        if not analyses:
+            from app.schemas.bim import AnalysisListResponse
+
+            return AnalysisListResponse(
+                project_id=project_id,
+                project_name=project.project_name,
+                total_reports=0,
+                reports=[],
+                latest_progress=None,
+            )
+
+        # Converte para schema
+        from app.schemas.bim import AnalysisListResponse, ConstructionAnalysis
+
+        reports = []
+        for analysis in analyses:
+            # Parse comparison se existir
+            comparison_data = None
+            if analysis.comparison:
+                from app.schemas.bim import AnalysisComparison
+
+                comparison_data = AnalysisComparison(**analysis.comparison)
+
+            report = ConstructionAnalysis(
+                analysis_id=analysis.analysis_id,
+                project_id=analysis.project_id,
+                image_s3_key=analysis.image_s3_key,
+                image_description=analysis.image_description,
+                detected_elements=analysis.detected_elements,
+                overall_progress=analysis.overall_progress,
+                summary=analysis.summary,
+                alerts=analysis.alerts or [],
+                comparison=comparison_data,
+                analyzed_at=analysis.analyzed_at,
+                processing_time=0.0,  # Não armazenado no DynamoDB
+            )
+            reports.append(report)
+
+        response = AnalysisListResponse(
+            project_id=project_id,
+            project_name=project.project_name,
+            total_reports=len(reports),
+            reports=reports,
+            latest_progress=reports[0].overall_progress if reports else None,
+        )
+
+        logger.info(
+            "relatorios_listados",
+            project_id=project_id,
+            total=len(reports),
+        )
+
+        return response
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("erro_listar_relatorios", error=str(e), exc_info=True)
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e)) from e

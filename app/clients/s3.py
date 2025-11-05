@@ -96,9 +96,7 @@ class S3Client:
         """Lista arquivos no S3."""
         try:
             async with self.session.client("s3", endpoint_url=self.endpoint_url) as s3:
-                response = await s3.list_objects_v2(
-                    Bucket=self.bucket_name, Prefix=prefix, MaxKeys=max_keys
-                )
+                response = await s3.list_objects_v2(Bucket=self.bucket_name, Prefix=prefix, MaxKeys=max_keys)
 
             files = []
             for obj in response.get("Contents", []):
@@ -117,9 +115,7 @@ class S3Client:
             logger.error("erro_s3_list", error=str(e), prefix=prefix)
             return []
 
-    async def generate_presigned_url(
-        self, s3_key: str, expiration: int = 3600, method: str = "get_object"
-    ) -> str:
+    async def generate_presigned_url(self, s3_key: str, expiration: int = 3600, method: str = "get_object") -> str:
         """Gera URL pré-assinada."""
         try:
             async with self.session.client("s3", endpoint_url=self.endpoint_url) as s3:

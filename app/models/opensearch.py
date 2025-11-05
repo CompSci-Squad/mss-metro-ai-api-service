@@ -134,6 +134,7 @@ class ImageAnalysisDocument(Document):
     image_s3_key = Keyword(required=True)
 
     # Metadados da análise
+    image_description = Text(analyzer="standard")  # Descrição fornecida pelo usuário (metadado)
     overall_progress = Text()
     summary = Text(analyzer="standard")
 

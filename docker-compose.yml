@@ -66,16 +66,14 @@ services:
     ports:
       - "8000:8000"
     environment:
-      # AWS/S3
+      # AWS/S3/DynamoDB (via LocalStack)
       - AWS_ENDPOINT=http://localstack:4566
       - S3_ENDPOINT_URL=http://localstack:4566
+      - DYNAMODB_ENDPOINT_URL=http://localstack:4566
       - AWS_ACCESS_KEY_ID=test
       - AWS_SECRET_ACCESS_KEY=test
       - AWS_DEFAULT_REGION=us-east-1
-      - AWS_REGION=us-east-1
       - S3_BUCKET=virag-bim-storage
-      # DynamoDB (via LocalStack)
-      - DYNAMODB_ENDPOINT_URL=http://localstack:4566
       # Redis
       - REDIS_HOST=redis
       - REDIS_PORT=6379
@@ -92,7 +90,10 @@ services:
       - EMBEDDING_MODEL_NAME=sentence-transformers/clip-ViT-B-32
       - USE_QUANTIZATION=true
       - DEVICE=cpu
+      # Processing
       - MAX_IMAGE_SIZE=1024
+      - MAX_FILE_SIZE_MB=50
+      - FUZZY_MATCH_THRESHOLD=80
     volumes:
       - model-cache:/app/models
     depends_on:

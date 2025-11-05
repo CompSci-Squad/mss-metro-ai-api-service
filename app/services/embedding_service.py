@@ -21,7 +21,7 @@ class EmbeddingService:
 
         # Load CLIP model for embeddings
         self.model = SentenceTransformer(self.model_name, cache_folder=self.cache_dir)
-        
+
         if self.device != "cpu":
             self.model = self.model.to(self.device)
 
@@ -32,7 +32,7 @@ class EmbeddingService:
         try:
             # Load and preprocess image
             image = Image.open(io.BytesIO(image_data)).convert("RGB")
-            
+
             # Resize if needed
             max_size = settings.max_image_size
             if max(image.size) > max_size:
@@ -40,10 +40,10 @@ class EmbeddingService:
 
             # Generate embedding
             embedding = self.model.encode(image, convert_to_numpy=True)
-            
+
             # Convert to list and normalize
             embedding_list = embedding.tolist()
-            
+
             logger.info("image_embedding_generated", dimension=len(embedding_list))
             return embedding_list
 
@@ -57,7 +57,7 @@ class EmbeddingService:
             # Generate embedding
             embedding = self.model.encode(text, convert_to_numpy=True)
             embedding_list = embedding.tolist()
-            
+
             logger.info("text_embedding_generated", dimension=len(embedding_list))
             return embedding_list
 
@@ -71,15 +71,15 @@ class EmbeddingService:
             # Generate both embeddings
             image_embedding = await self.generate_image_embedding(image_data)
             text_embedding = await self.generate_text_embedding(text)
-            
+
             if not image_embedding or not text_embedding:
                 return image_embedding or text_embedding
-            
+
             # Average the embeddings
             image_array = np.array(image_embedding)
             text_array = np.array(text_embedding)
             combined = (image_array + text_array) / 2
-            
+
             logger.info("multimodal_embedding_generated")
             return combined.tolist()
 

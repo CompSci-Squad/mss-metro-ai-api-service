@@ -63,8 +63,13 @@ class Container(containers.DeclarativeContainer):
     )
 
     # BIM Services
-    ifc_processor = providers.Singleton(IFCProcessorService)
+    ifc_processor = providers.Singleton(
+        IFCProcessorService,
+        embedding_service=embedding_service,
+    )
 
     bim_analysis_service = providers.Singleton(
-        BIMAnalysisService, vlm_service=vlm_service, embedding_service=embedding_service
+        BIMAnalysisService,
+        vlm_service=vlm_service,
+        embedding_service=embedding_service,
     )

@@ -1,12 +1,11 @@
-"""
-Serviço de análise BIM que compara imagens reais com modelo IFC.
-Utiliza VLM para identificar progresso e desvios na execução da obra.
-"""
+"""Serviço de análise BIM com VI-RAG."""
 
 import time
 
 import structlog
+from rapidfuzz import fuzz, process
 
+from app.core.settings import get_settings
 from app.schemas.bim import DetectedElement, ProgressStatus
 from app.services.embedding_service import EmbeddingService
 from app.services.vlm_service import VLMService
@@ -15,14 +14,61 @@ logger = structlog.get_logger(__name__)
 
 
 class BIMAnalysisService:
-    """
-    Serviço para análise de imagens de obras comparando com modelo BIM.
-    Integra VLM com dados do modelo IFC.
-    """
-
     def __init__(self, vlm_service: VLMService, embedding_service: EmbeddingService):
-        self.vlm_service = vlm_service
+        self.vlm = vlm_service
         self.embedding_service = embedding_service
+
+    async def _generate_image_embedding(self, image_bytes: bytes) -> list[float]:
+        """Gera embedding da imagem usando CLIP."""
+        try:
+            from PIL import Image
+            import io
+
+            image = Image.open(io.BytesIO(image_bytes))
+            embedding = await self.embedding_service.generate_image_embedding(image_bytes)
+
+            logger.info("image_embedding_gerado", embedding_dim=len(embedding))
+            return embedding
+
+        except Exception as e:
+            logger.error("erro_gerar_embedding_imagem", error=str(e))
+            raise
+
+    async def _fetch_rag_context(self, image_embedding: list[float], project_id: str, top_k: int = 10) -> dict:
+        try:
+            from app.models.opensearch import BIMElementEmbedding
+
+            # Busca elementos similares usando KNN
+            search = BIMElementEmbedding.search_by_vector(
+                query_embedding=image_embedding, size=top_k, project_id=project_id
+            )
+
+            results = search.execute()
+
+            # Extrai elementos relevantes
+            context_elements = []
+            for hit in results:
+                context_elements.append(
+                    {
+                        "element_id": hit.element_id,
+                        "element_type": hit.element_type,
+                        "description": hit.description,
+                        "element_name": hit.element_name or "",
+                        "similarity_score": hit.meta.score if hasattr(hit.meta, "score") else None,
+                    }
+                )
+
+            logger.info("rag_context_buscado", elements_found=len(context_elements))
+
+            return {
+                "elements": context_elements,
+                "total_found": len(context_elements),
+            }
+
+        except Exception as e:
+            logger.error("erro_buscar_rag_context", error=str(e))
+            # Retorna contexto vazio em caso de erro
+            return {"elements": [], "total_found": 0}
 
     async def analyze_construction_image(
         self,
@@ -66,19 +112,13 @@ class BIMAnalysisService:
             )
 
             # 4. Compara descrição com modelo BIM (fallback)
-            keyword_matches = await self._compare_with_bim_model(
-                description, project_data, target_element_ids
-            )
+            keyword_matches = await self._compare_with_bim_model(description, project_data, target_element_ids)
 
             # 5. Combina resultados (vetorial + keywords)
-            detected_elements = self._merge_detection_results(
-                vector_matches, keyword_matches["detected_elements"]
-            )
+            detected_elements = self._merge_detection_results(vector_matches, keyword_matches["detected_elements"])
 
             # 6. Calcula métricas de progresso
-            progress_metrics = self._calculate_progress_metrics(
-                detected_elements, project_data.get("elements", [])
-            )
+            progress_metrics = self._calculate_progress_metrics(detected_elements, project_data.get("elements", []))
 
             # 7. Identifica alertas
             alerts = self._identify_alerts(detected_elements, project_data)
@@ -135,24 +175,25 @@ class BIMAnalysisService:
     async def _compare_with_bim_model(
         self, image_description: str, project_data: dict, target_element_ids: list[str] | None = None
     ) -> dict:
-        """Compara descrição da imagem com elementos do modelo BIM."""
+        """Compara descrição da imagem com elementos do modelo BIM usando fuzzy matching."""
         try:
+            settings = get_settings()
             elements = project_data.get("elements", [])
             detected_elements = []
 
             description_lower = image_description.lower()
 
-            # Palavras-chave por tipo de elemento
+            # Palavras-chave expandidas por tipo de elemento
             element_keywords = {
-                "wall": ["wall", "parede", "alvenaria", "masonry"],
-                "slab": ["slab", "laje", "floor", "piso"],
-                "column": ["column", "pilar", "coluna"],
-                "beam": ["beam", "viga"],
-                "foundation": ["foundation", "fundação", "footing", "pile", "sapata", "estaca"],
-                "stair": ["stair", "escada", "stairs"],
-                "roof": ["roof", "telhado", "cobertura"],
-                "door": ["door", "porta"],
-                "window": ["window", "janela"],
+                "wall": ["wall", "parede", "alvenaria", "masonry", "muro", "divisa"],
+                "slab": ["slab", "laje", "floor", "piso", "pavimento", "deck"],
+                "column": ["column", "pilar", "coluna", "suporte", "apoio"],
+                "beam": ["beam", "viga", "trave"],
+                "foundation": ["foundation", "fundação", "footing", "pile", "sapata", "estaca", "radier"],
+                "stair": ["stair", "escada", "stairs", "degrau", "rampa"],
+                "roof": ["roof", "telhado", "cobertura", "telha"],
+                "door": ["door", "porta", "acesso", "entrada"],
+                "window": ["window", "janela", "abertura", "esquadria"],
             }
 
             for element in elements:
@@ -160,17 +201,39 @@ class BIMAnalysisService:
                     continue
 
                 element_type = element["element_type"].lower()
+                element_name = element.get("name", "").lower()
 
                 is_detected = False
                 confidence = 0.0
+                match_method = "none"
 
+                # Tenta match exato primeiro
                 for type_key, keywords in element_keywords.items():
                     if type_key in element_type:
                         for keyword in keywords:
                             if keyword in description_lower:
                                 is_detected = True
-                                confidence = 0.75
+                                confidence = 0.85
+                                match_method = "exact"
                                 break
+
+                # Se não encontrou, tenta fuzzy matching
+                if not is_detected:
+                    for type_key, keywords in element_keywords.items():
+                        if type_key in element_type:
+                            # Fuzzy match nas keywords
+                            best_match = process.extractOne(
+                                element_name or element_type, keywords, scorer=fuzz.partial_ratio
+                            )
+
+                            if best_match and best_match[1] >= settings.fuzzy_match_threshold:
+                                # Verifica se o melhor match está na descrição
+                                desc_match = fuzz.partial_ratio(best_match[0], description_lower)
+                                if desc_match >= settings.fuzzy_match_threshold:
+                                    is_detected = True
+                                    confidence = min(desc_match / 100.0, 0.90)
+                                    match_method = "fuzzy"
+                                    break
 
                 if is_detected:
                     status = self._determine_element_status(element, description_lower)
@@ -178,13 +241,21 @@ class BIMAnalysisService:
                     detected_element = DetectedElement(
                         element_id=element["element_id"],
                         element_type=element["element_type"],
-                        confidence=confidence,
+                        confidence=round(confidence, 3),
                         status=status,
-                        description=f"{element['element_type']} detectado na imagem",
+                        description=f"{element['element_type']} detectado ({match_method} match)",
                         deviation=None,
                     )
 
                     detected_elements.append(detected_element.model_dump())
+
+                    logger.debug(
+                        "elemento_detectado",
+                        element_id=element["element_id"],
+                        type=element["element_type"],
+                        confidence=confidence,
+                        method=match_method,
+                    )
 
             return {"detected_elements": detected_elements}
 
@@ -209,9 +280,7 @@ class BIMAnalysisService:
 
         return ProgressStatus.IN_PROGRESS
 
-    def _calculate_progress_metrics(
-        self, detected_elements: list[dict], all_elements: list[dict]
-    ) -> dict:
+    def _calculate_progress_metrics(self, detected_elements: list[dict], all_elements: list[dict]) -> dict:
         """Calcula métricas de progresso."""
         if not all_elements:
             return {"overall_progress": 0.0}
@@ -219,13 +288,9 @@ class BIMAnalysisService:
         total_elements = len(all_elements)
         detected_count = len(detected_elements)
 
-        completed_count = sum(
-            1 for e in detected_elements if e.get("status") == ProgressStatus.COMPLETED
-        )
+        completed_count = sum(1 for e in detected_elements if e.get("status") == ProgressStatus.COMPLETED)
 
-        in_progress_count = sum(
-            1 for e in detected_elements if e.get("status") == ProgressStatus.IN_PROGRESS
-        )
+        in_progress_count = sum(1 for e in detected_elements if e.get("status") == ProgressStatus.IN_PROGRESS)
 
         # Peso: completo = 1.0, em progresso = 0.5
         weighted_progress = (completed_count * 1.0 + in_progress_count * 0.5) / total_elements * 100
@@ -340,3 +405,190 @@ class BIMAnalysisService:
                 merged[element_id] = result
 
         return list(merged.values())
+
+    async def _get_previous_analysis(self, project_id: str) -> dict | None:
+        """
+        Busca a análise mais recente do projeto para comparação.
+
+        Args:
+            project_id: ID do projeto
+
+        Returns:
+            Dados da análise anterior ou None
+        """
+        try:
+            from app.models.dynamodb import ConstructionAnalysisModel
+
+            # Busca análises ordenadas por data (mais recente primeiro)
+            analyses = list(
+                ConstructionAnalysisModel.project_id_index.query(
+                    project_id,
+                    scan_index_forward=False,  # Ordem decrescente
+                    limit=1,
+                )
+            )
+
+            if not analyses:
+                logger.info("nenhuma_analise_anterior", project_id=project_id)
+                return None
+
+            previous = analyses[0]
+
+            result = {
+                "analysis_id": previous.analysis_id,
+                "analyzed_at": previous.analyzed_at,
+                "overall_progress": previous.overall_progress,
+                "detected_elements": previous.detected_elements,
+                "summary": previous.summary,
+            }
+
+            logger.info("analise_anterior_encontrada", analysis_id=previous.analysis_id)
+            return result
+
+        except Exception as e:
+            logger.warning("erro_buscar_analise_anterior", error=str(e))
+            return None
+
+    async def _compare_with_previous_analysis(
+        self,
+        current_elements: list[dict],
+        previous_analysis: dict,
+        current_description: str,
+    ) -> dict:
+        """
+        Compara análise atual com anterior usando VLM.
+
+        Args:
+            current_elements: Elementos detectados atualmente
+            previous_analysis: Dados da análise anterior
+            current_description: Descrição atual da imagem
+
+        Returns:
+            Dicionário com comparação estruturada
+        """
+        try:
+            from app.schemas.bim import ProgressStatus
+
+            previous_elements = previous_analysis.get("detected_elements", [])
+            previous_progress = previous_analysis.get("overall_progress", 0.0)
+
+            # Calcula progresso atual
+            current_progress = self._calculate_overall_progress(current_elements)
+            progress_change = round(current_progress - previous_progress, 2)
+
+            # Identifica elementos novos, removidos e alterados
+            current_ids = {e.get("element_id") for e in current_elements if e.get("element_id")}
+            previous_ids = {e.get("element_id") for e in previous_elements if e.get("element_id")}
+
+            added_ids = current_ids - previous_ids
+            removed_ids = previous_ids - current_ids
+            common_ids = current_ids & previous_ids
+
+            # Elementos adicionados
+            elements_added = [
+                {
+                    "element_id": e["element_id"],
+                    "element_type": e["element_type"],
+                    "change_type": "new",
+                    "current_status": e.get("status", ProgressStatus.NOT_STARTED),
+                    "description": f"Novo elemento detectado: {e['element_type']}",
+                }
+                for e in current_elements
+                if e.get("element_id") in added_ids
+            ]
+
+            # Elementos removidos
+            elements_removed = [
+                {
+                    "element_id": e["element_id"],
+                    "element_type": e["element_type"],
+                    "change_type": "removed",
+                    "previous_status": e.get("status", ProgressStatus.NOT_STARTED),
+                    "description": f"Elemento não mais visível: {e['element_type']}",
+                }
+                for e in previous_elements
+                if e.get("element_id") in removed_ids
+            ]
+
+            # Elementos com mudança de status
+            elements_changed = []
+            for curr_elem in current_elements:
+                if curr_elem.get("element_id") not in common_ids:
+                    continue
+
+                # Busca elemento anterior correspondente
+                prev_elem = next(
+                    (e for e in previous_elements if e.get("element_id") == curr_elem.get("element_id")), None
+                )
+
+                if prev_elem:
+                    curr_status = curr_elem.get("status")
+                    prev_status = prev_elem.get("status")
+
+                    if curr_status != prev_status:
+                        elements_changed.append(
+                            {
+                                "element_id": curr_elem["element_id"],
+                                "element_type": curr_elem["element_type"],
+                                "change_type": "status_change",
+                                "previous_status": prev_status,
+                                "current_status": curr_status,
+                                "description": f"Status alterado de {prev_status} para {curr_status}",
+                            }
+                        )
+
+            # Gera resumo da comparação usando VLM
+            comparison_prompt = f"""Compare the current construction analysis with the previous one:
+
+**Previous Analysis:**
+- Progress: {previous_progress}%
+- Summary: {previous_analysis.get("summary", "N/A")}
+- Elements detected: {len(previous_elements)}
+
+**Current Analysis:**
+- Progress: {current_progress}%
+- Description: {current_description}
+- Elements detected: {len(current_elements)}
+
+**Changes:**
+- Progress change: {progress_change}%
+- New elements: {len(elements_added)}
+- Removed elements: {len(elements_removed)}
+- Changed elements: {len(elements_changed)}
+
+Provide a concise summary (2-3 sentences) of the construction progress evolution."""
+
+            comparison_summary = await self.vlm.generate_text(comparison_prompt)
+
+            result = {
+                "previous_analysis_id": previous_analysis["analysis_id"],
+                "previous_timestamp": previous_analysis["analyzed_at"],
+                "progress_change": progress_change,
+                "elements_added": elements_added,
+                "elements_removed": elements_removed,
+                "elements_changed": elements_changed,
+                "summary": comparison_summary,
+            }
+
+            logger.info(
+                "comparacao_concluida",
+                progress_change=progress_change,
+                added=len(elements_added),
+                removed=len(elements_removed),
+                changed=len(elements_changed),
+            )
+
+            return result
+
+        except Exception as e:
+            logger.error("erro_comparar_analises", error=str(e))
+            # Retorna comparação básica em caso de erro
+            return {
+                "previous_analysis_id": previous_analysis.get("analysis_id"),
+                "previous_timestamp": previous_analysis.get("analyzed_at"),
+                "progress_change": 0.0,
+                "elements_added": [],
+                "elements_removed": [],
+                "elements_changed": [],
+                "summary": "Erro ao gerar comparação detalhada",
+            }

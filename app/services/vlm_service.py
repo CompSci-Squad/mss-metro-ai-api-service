@@ -44,9 +44,7 @@ class VLMService:
             )
         else:
             # Standard loading without quantization
-            self.model = Blip2ForConditionalGeneration.from_pretrained(
-                self.model_name, cache_dir=self.cache_dir
-            )
+            self.model = Blip2ForConditionalGeneration.from_pretrained(self.model_name, cache_dir=self.cache_dir)
             self.model = self.model.to(self.device)
 
         self.model.eval()
@@ -121,7 +119,7 @@ class VLMService:
 
             # Generate comparison prompt
             comparison_prompt = "Describe the differences between these images:"
-            
+
             # For now, return basic comparison based on captions
             # In production, could use more sophisticated comparison
             comparison = {

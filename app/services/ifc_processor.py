@@ -91,9 +91,7 @@ class IFCProcessorService:
                 "project_name": project.Name if hasattr(project, "Name") else "Sem nome",
                 "description": project.Description if hasattr(project, "Description") else None,
                 "site_name": site[0].Name if site and hasattr(site[0], "Name") else None,
-                "building_name": (
-                    building[0].Name if building and hasattr(building[0], "Name") else None
-                ),
+                "building_name": (building[0].Name if building and hasattr(building[0], "Name") else None),
             }
 
         except Exception as e:
@@ -155,9 +153,7 @@ class IFCProcessorService:
                             for prop in property_set.HasProperties:
                                 if prop.is_a("IfcPropertySingleValue"):
                                     prop_name = prop.Name
-                                    prop_value = (
-                                        prop.NominalValue.wrappedValue if prop.NominalValue else None
-                                    )
+                                    prop_value = prop.NominalValue.wrappedValue if prop.NominalValue else None
                                     properties[prop_name] = prop_value
 
             if hasattr(ifc_element, "Description") and ifc_element.Description:

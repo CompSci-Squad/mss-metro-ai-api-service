@@ -13,6 +13,7 @@ from pynamodb.attributes import (
     UnicodeAttribute,
     UTCDateTimeAttribute,
 )
+from pynamodb.indexes import GlobalSecondaryIndex, AllProjection
 from pynamodb.models import Model
 
 
@@ -51,6 +52,19 @@ class BIMProject(Model):
         super().save(*args, **kwargs)
 
 
+class ProjectIdIndex(GlobalSecondaryIndex):
+    """Índice secundário para query por project_id."""
+
+    class Meta:
+        index_name = "project_id_index"
+        projection = AllProjection()
+        read_capacity_units = 1
+        write_capacity_units = 1
+
+    project_id = UnicodeAttribute(hash_key=True)
+    analyzed_at = UnicodeAttribute(range_key=True)
+
+
 class ConstructionAnalysisModel(Model):
     """
     Tabela de análises de imagens.
@@ -68,16 +82,33 @@ class ConstructionAnalysisModel(Model):
     # Attributes
     project_id = UnicodeAttribute()
     image_s3_key = UnicodeAttribute()
+    image_description = UnicodeAttribute(null=True)  # Descrição fornecida pelo usuário
     overall_progress = NumberAttribute()
     summary = UnicodeAttribute()
-    processing_time = NumberAttribute()
 
     # JSON attributes
     detected_elements = ListAttribute(default=list)
     alerts = ListAttribute(default=list)
+    comparison = MapAttribute(null=True)  # Comparação com análise anterior
 
     # Timestamp
     analyzed_at = UTCDateTimeAttribute(default=datetime.utcnow)
+
+    # Índice para query por projeto
+    project_id_index = ProjectIdIndex()
+
+
+class AlertProjectIdIndex(GlobalSecondaryIndex):
+    """Índice secundário para query de alertas por project_id."""
+
+    class Meta:
+        index_name = "project_id_index"
+        projection = AllProjection()
+        read_capacity_units = 1
+        write_capacity_units = 1
+
+    project_id = UnicodeAttribute(hash_key=True)
+    created_at = UnicodeAttribute(range_key=True)
 
 
 class AlertModel(Model):
@@ -110,6 +141,9 @@ class AlertModel(Model):
 
     # Timestamp
     created_at = UTCDateTimeAttribute(default=datetime.utcnow)
+
+    # Índice para query por projeto
+    project_id_index = AlertProjectIdIndex()
 
 
 def configure_models(endpoint_url: str):
