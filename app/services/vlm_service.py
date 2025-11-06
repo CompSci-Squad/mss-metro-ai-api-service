@@ -1,3 +1,4 @@
+import gc
 import io
 from pathlib import Path
 from typing import Optional
@@ -11,13 +12,28 @@ from app.core.logger import logger
 from app.core.settings import settings
 
 
+def log_memory_usage(stage: str):
+    """Log de uso de memória para debug."""
+    try:
+        import psutil
+        process = psutil.Process()
+        mem_info = process.memory_info()
+        logger.info(
+            f"memory_usage_{stage}",
+            rss_gb=round(mem_info.rss / 1024**3, 2),
+            available_gb=round(psutil.virtual_memory().available / 1024**3, 2)
+        )
+    except ImportError:
+        pass  # psutil não instalado
+
+
 class VLMService:
     """Vision-Language Model service for image understanding and captioning."""
 
     def __init__(self):
         self.device = settings.device
         self.model_name = settings.vlm_model_name
-        self.cache_dir = settings.vlm_model_cache_dir
+        self.cache_dir = settings.vlm_model_cache_dir or "./models"  # Fallback se None
         self.use_quantization = settings.use_quantization
 
         logger.info(
@@ -25,7 +41,7 @@ class VLMService:
             model=self.model_name,
             device=self.device,
             quantization=self.use_quantization,
-            intel_optimum=INTEL_OPTIMUM_AVAILABLE
+            cache_dir=self.cache_dir
         )
 
         # Load processor
@@ -36,27 +52,43 @@ class VLMService:
             # PyTorch Dynamic INT8 Quantization
             logger.info("using_pytorch_int8_quantization")
             
-            quantized_model_path = Path(self.cache_dir) / "blip2-int8-dynamic"
+            # Garante que cache_dir seja um Path válido
+            cache_path = Path(self.cache_dir).resolve()
+            quantized_model_file = cache_path / "blip2-int8-dynamic.pt"
+            
+            logger.info("quantization_paths", cache_dir=str(cache_path), model_file=str(quantized_model_file))
             
             # Verifica se modelo quantizado já existe em cache
-            if quantized_model_path.exists():
-                logger.info("loading_cached_quantized_model", path=str(quantized_model_path))
+            if quantized_model_file.exists():
+                logger.info("loading_cached_quantized_model", path=str(quantized_model_file))
                 try:
-                    self.model = Blip2ForConditionalGeneration.from_pretrained(quantized_model_path)
+                    self.model = torch.load(
+                        quantized_model_file, 
+                        map_location=self.device,
+                        weights_only=False  # PyTorch 2.6+ requer para modelos customizados
+                    )
                     logger.info("quantized_model_loaded_from_cache")
                 except Exception as e:
                     logger.warning("failed_to_load_cached_model", error=str(e))
                     # Se falhar, recria
-                    quantized_model_path = None
+                    self.model = None
+            else:
+                self.model = None
             
-            if not quantized_model_path or not quantized_model_path.exists():
-                # Carrega modelo original em FP32
+            if self.model is None:
+                # Carrega modelo original com otimizações de memória
                 logger.info("loading_fp32_model_for_quantization")
+                log_memory_usage("before_model_load")
+                
                 base_model = Blip2ForConditionalGeneration.from_pretrained(
                     self.model_name,
-                    cache_dir=self.cache_dir
+                    cache_dir=self.cache_dir,
+                    low_cpu_mem_usage=True,      # Carrega em chunks
+                    torch_dtype=torch.float16,    # Carrega direto em FP16
+                    device_map="auto"             # Gerenciamento automático
                 )
                 base_model.eval()
+                log_memory_usage("after_model_load")
                 
                 # Aplica quantização dinâmica INT8
                 logger.info("applying_dynamic_int8_quantization")
@@ -66,11 +98,19 @@ class VLMService:
                     dtype=torch.qint8   # INT8
                 )
                 
-                # Salva modelo quantizado para cache
-                logger.info("saving_quantized_model", path=str(quantized_model_path))
-                quantized_model_path.mkdir(parents=True, exist_ok=True)
-                self.model.save_pretrained(str(quantized_model_path))
+                # Salva modelo quantizado para cache usando torch.save
+                logger.info("saving_quantized_model", path=str(quantized_model_file))
+                quantized_model_file.parent.mkdir(parents=True, exist_ok=True)
+                torch.save(self.model, str(quantized_model_file))
                 logger.info("quantization_complete")
+                
+                # Libera modelo base e força garbage collection
+                del base_model
+                gc.collect()
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+                log_memory_usage("after_gc")
+                logger.info("memory_freed_after_quantization")
             
             self.model = self.model.to(self.device)
             logger.info("int8_quantized_model_ready")

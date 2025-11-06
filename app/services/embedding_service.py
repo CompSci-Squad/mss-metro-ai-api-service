@@ -1,3 +1,4 @@
+import gc
 import io
 from typing import List, Optional
 
@@ -9,6 +10,21 @@ from app.core.logger import logger
 from app.core.settings import settings
 
 
+def log_memory_usage(stage: str):
+    """Log de uso de memória para debug."""
+    try:
+        import psutil
+        process = psutil.Process()
+        mem_info = process.memory_info()
+        logger.info(
+            f"memory_usage_{stage}",
+            rss_gb=round(mem_info.rss / 1024**3, 2),
+            available_gb=round(psutil.virtual_memory().available / 1024**3, 2)
+        )
+    except ImportError:
+        pass  # psutil não instalado
+
+
 class EmbeddingService:
     """Service for generating image embeddings using CLIP."""
 
@@ -16,6 +32,11 @@ class EmbeddingService:
         self.model_name = settings.embedding_model_name
         self.cache_dir = settings.vlm_model_cache_dir
         self.device = settings.device
+
+        # Limpa memória antes de carregar
+        gc.collect()
+        logger.info("memory_cleaned_before_embedding_load")
+        log_memory_usage("before_embedding_load")
 
         logger.info("initializing_embedding_model", model=self.model_name, device=self.device)
 
@@ -25,6 +46,7 @@ class EmbeddingService:
         if self.device != "cpu":
             self.model = self.model.to(self.device)
 
+        log_memory_usage("after_embedding_load")
         logger.info("embedding_model_loaded")
 
     async def generate_image_embedding(self, image_data: bytes) -> List[float]:

@@ -51,6 +51,7 @@ dependencies = [
 dev = [
     "mypy>=1.13.0",
     "pre-commit>=4.0.0",
+    "psutil>=5.9.0",
     "pytest>=8.4.2",
     "pytest-asyncio>=0.24.0",
     "pytest-cov>=6.0.0",
@@ -162,6 +163,7 @@ lint-fix = "ruff check --fix app/ tests/ && ruff format app/ tests/"
 format = "ruff format app/ tests/"
 type-check = "mypy app/"
 test = "pytest tests/ -v"
+pre-quant = "python scripts/quantize_blip2.py"
 test-cov = "pytest tests/ --cov=app --cov-report=term-missing --cov-report=html"
 dev = "uvicorn app.main:app --reload --host 0.0.0.0 --port 8000"
 pre-commit = "pre-commit run --all-files"

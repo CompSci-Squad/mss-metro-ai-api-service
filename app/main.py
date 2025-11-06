@@ -86,17 +86,26 @@ async def startup_event():
     print("\nCarregando modelos ML...")
 
     try:
+        import gc
+        
         # 1. Carrega VLM (Vision-Language Model)
         print("Carregando VLM (BLIP2)...")
         from app.services.vlm_service import VLMService
         app.state.vlm_service = VLMService()
         print("VLM carregado e pronto!")
 
+        # Força limpeza de memória antes do próximo modelo
+        print("Liberando memória...")
+        gc.collect()
+
         # 2. Carrega Embedding Service (CLIP)
         print("Carregando Embedding Service (CLIP)...")
         from app.services.embedding_service import EmbeddingService
         app.state.embedding_service = EmbeddingService()
         print("Embedding Service carregado e pronto!")
+
+        # Limpeza final
+        gc.collect()
 
         # Marca como carregado
         app.state.ml_models_loaded = True
