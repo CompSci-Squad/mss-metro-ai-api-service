@@ -54,16 +54,10 @@ class Container(containers.DeclarativeContainer):
     # ML Services
     vlm_service = providers.Singleton(
         VLMService,
-        model_name=settings.provided.vlm_model_name,
-        device=settings.provided.device,
-        use_quantization=settings.provided.use_quantization,
     )
 
     embedding_service = providers.Singleton(
         EmbeddingService,
-        model_name=settings.provided.embedding_model_name,
-        device=settings.provided.device,
-        cache=redis_cache,
     )
 
     # BIM Services

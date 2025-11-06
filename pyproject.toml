@@ -41,6 +41,7 @@ dependencies = [
     "bitsandbytes>=0.42.0",
     # DynamoDB ORM
     "pynamodb>=6.0.0",
+    "uvicorn>=0.38.0",
 ]
 
 [project.optional-dependencies]

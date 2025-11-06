@@ -1,5 +1,7 @@
 """\nCliente S3 completo para VIRAG-BIM.\nUpload, download, listagem e gestão de arquivos.\n"""
 
+import os
+
 import aioboto3
 import structlog
 from botocore.exceptions import ClientError
@@ -13,7 +15,36 @@ class S3Client:
     def __init__(self, bucket_name: str, endpoint_url: str | None = None):
         self.bucket_name = bucket_name
         self.endpoint_url = endpoint_url
-        self.session = aioboto3.Session()
+        
+        # Configura credenciais AWS (lê de variáveis de ambiente)
+        aws_access_key = os.getenv("AWS_ACCESS_KEY_ID", "test")
+        aws_secret_key = os.getenv("AWS_SECRET_ACCESS_KEY", "test")
+        aws_region = os.getenv("AWS_DEFAULT_REGION", "us-east-1")
+        
+        self.session = aioboto3.Session(
+            aws_access_key_id=aws_access_key,
+            aws_secret_access_key=aws_secret_key,
+            region_name=aws_region,
+        )
+
+    async def ensure_bucket_exists(self) -> None:
+        """Garante que o bucket existe, criando se necessário."""
+        try:
+            async with self.session.client("s3", endpoint_url=self.endpoint_url) as s3:
+                try:
+                    await s3.head_bucket(Bucket=self.bucket_name)
+                    logger.info("bucket_existe", bucket=self.bucket_name)
+                except ClientError as e:
+                    error_code = e.response.get("Error", {}).get("Code")
+                    if error_code == "404":
+                        # Bucket não existe, criar
+                        await s3.create_bucket(Bucket=self.bucket_name)
+                        logger.info("bucket_criado", bucket=self.bucket_name)
+                    else:
+                        raise
+        except Exception as e:
+            logger.error("erro_verificar_bucket", error=str(e))
+            raise
 
     async def upload_file(
         self,
@@ -35,6 +66,9 @@ class S3Client:
             Dict com informações do upload
         """
         try:
+            # Garante que bucket existe
+            await self.ensure_bucket_exists()
+            
             async with self.session.client("s3", endpoint_url=self.endpoint_url) as s3:
                 await s3.put_object(
                     Bucket=self.bucket_name,

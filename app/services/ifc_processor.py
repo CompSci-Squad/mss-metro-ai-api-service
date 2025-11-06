@@ -31,6 +31,7 @@ class IFCProcessorService:
             "IfcPile",
             "IfcRailing",
             "IfcCurtainWall",
+            "IfcBuildingElementProxy",  # Elementos genéricos/levantamentos 3D
         ]
         self.embedding_service = embedding_service
 
@@ -54,14 +55,33 @@ class IFCProcessorService:
 
             try:
                 ifc_file = ifcopenshell.open(temp_path)
+                logger.info("ifc_file_aberto", temp_path=temp_path)
+
+                # Lista TODOS os tipos IFC presentes no arquivo
+                all_types = {entity.is_a() for entity in ifc_file.by_type("IfcRoot")}
+                logger.info("tipos_ifc_presentes", total_tipos=len(all_types), tipos=sorted(all_types)[:50])
 
                 project_info = await self._extract_project_info(ifc_file)
+                logger.info("project_info_extraido", project_info=project_info)
+                
                 elements = await self._extract_elements(ifc_file)
+                logger.info("elementos_extraidos", total=len(elements))
+                
+                # VALIDAÇÃO: Deve ter pelo menos 1 elemento
+                if len(elements) == 0:
+                    raise ValueError(
+                        "Nenhum elemento BIM estrutural encontrado no arquivo IFC. "
+                        "O arquivo pode ser um levantamento 3D (point cloud) ou não conter elementos suportados. "
+                        f"Tipos suportados: {', '.join(self.supported_types)}"
+                    )
 
+                # Serializa TODOS os elementos recursivamente para DynamoDB
+                serialized_elements = [self._deep_serialize(elem) for elem in elements]
+                
                 result = {
                     "project_info": project_info,
                     "total_elements": len(elements),
-                    "elements": elements,
+                    "elements": serialized_elements,
                     "processed_at": datetime.utcnow().isoformat(),
                 }
 
@@ -83,9 +103,18 @@ class IFCProcessorService:
     async def _extract_project_info(self, ifc_file) -> dict:
         """Extrai informações básicas do projeto."""
         try:
-            project = ifc_file.by_type("IfcProject")[0]
+            projects = ifc_file.by_type("IfcProject")
+            logger.info("projetos_encontrados", count=len(projects))
+            
+            if not projects:
+                logger.warning("nenhum_projeto_ifc_encontrado")
+                return {"project_name": "Undefined"}
+            
+            project = projects[0]
             site = ifc_file.by_type("IfcSite")
             building = ifc_file.by_type("IfcBuilding")
+            
+            logger.info("estrutura_ifc", sites=len(site), buildings=len(building))
 
             return {
                 "project_name": project.Name if hasattr(project, "Name") else "Sem nome",
@@ -95,26 +124,32 @@ class IFCProcessorService:
             }
 
         except Exception as e:
-            logger.warning("erro_extrair_info_projeto", error=str(e))
-            return {}
+            logger.warning("erro_extrair_info_projeto", error=str(e), exc_info=True)
+            return {"project_name": "Undefined"}
 
     async def _extract_elements(self, ifc_file) -> list[dict]:
         """Extrai elementos estruturais do modelo IFC."""
         elements = []
+        
+        logger.info("iniciando_extracao_elementos", supported_types=self.supported_types)
 
         for ifc_type in self.supported_types:
             try:
                 items = ifc_file.by_type(ifc_type)
+                logger.info("buscando_tipo", ifc_type=ifc_type, encontrados=len(items))
 
                 for item in items:
                     element = await self._parse_element(item, ifc_type)
                     if element:
                         elements.append(element)
+                    else:
+                        logger.warning("elemento_ignorado", ifc_type=ifc_type)
 
             except Exception as e:
                 logger.warning("erro_processar_tipo", ifc_type=ifc_type, error=str(e))
                 continue
 
+        logger.info("extracao_completa", total_elementos=len(elements))
         return elements
 
     async def _parse_element(self, ifc_element, element_type: str) -> dict | None:
@@ -154,18 +189,70 @@ class IFCProcessorService:
                                 if prop.is_a("IfcPropertySingleValue"):
                                     prop_name = prop.Name
                                     prop_value = prop.NominalValue.wrappedValue if prop.NominalValue else None
-                                    properties[prop_name] = prop_value
+                                    # Converte para tipo primitivo
+                                    properties[prop_name] = self._serialize_value(prop_value)
 
             if hasattr(ifc_element, "Description") and ifc_element.Description:
-                properties["Description"] = ifc_element.Description
+                properties["Description"] = str(ifc_element.Description)
 
             if hasattr(ifc_element, "ObjectType") and ifc_element.ObjectType:
-                properties["ObjectType"] = ifc_element.ObjectType
+                properties["ObjectType"] = str(ifc_element.ObjectType)
 
         except Exception as e:
             logger.warning("erro_extrair_propriedades", error=str(e))
 
         return properties
+    
+    def _serialize_value(self, value):
+        """Serializa valor IFC para tipo primitivo compatível com JSON/DynamoDB."""
+        if value is None:
+            return None
+        
+        # Se for entity_instance do ifcopenshell, converte para string
+        if hasattr(value, 'is_a'):
+            return str(value)
+        
+        # Tipos primitivos
+        if isinstance(value, (str, int, float, bool)):
+            return value
+        
+        # Listas/tuplas
+        if isinstance(value, (list, tuple)):
+            return [self._serialize_value(v) for v in value]
+        
+        # Dict
+        if isinstance(value, dict):
+            return {k: self._serialize_value(v) for k, v in value.items()}
+        
+        # Fallback: converte para string
+        return str(value)
+    
+    def _deep_serialize(self, obj):
+        """
+        Serialização profunda recursiva de objetos para DynamoDB.
+        Garante que NENHUM objeto ifcopenshell.entity_instance permaneça.
+        """
+        if obj is None:
+            return None
+        
+        # Entity instance → string
+        if hasattr(obj, 'is_a'):
+            return str(obj)
+        
+        # Tipos primitivos
+        if isinstance(obj, (str, int, float, bool)):
+            return obj
+        
+        # Dict → recursivo
+        if isinstance(obj, dict):
+            return {k: self._deep_serialize(v) for k, v in obj.items()}
+        
+        # List/Tuple → recursivo
+        if isinstance(obj, (list, tuple)):
+            return [self._deep_serialize(item) for item in obj]
+        
+        # Fallback: converte para string
+        return str(obj)
 
     def _extract_geometry(self, ifc_element) -> dict | None:
         """Extrai informações geométricas básicas."""
@@ -185,24 +272,46 @@ class IFCProcessorService:
             elements: Lista de elementos processados
 
         Returns:
-            Lista de strings descritivas
+            Lista de strings descritivas enriquecidas
         """
         contexts = []
 
         for element in elements:
-            context = f"{element['element_type']}"
+            # Tipo do elemento
+            context_parts = [element['element_type']]
 
+            # Nome do elemento
             if element.get("name"):
-                context += f" - {element['name']}"
+                context_parts.append(f"Nome: {element['name']}")
 
+            # Propriedades importantes
             if element.get("properties"):
                 props = element["properties"]
-                if "Description" in props:
-                    context += f" - {props['Description']}"
-                if "ObjectType" in props:
-                    context += f" - {props['ObjectType']}"
+                
+                # Prioriza propriedades mais relevantes
+                priority_props = ["ObjectType", "Description", "Material", "Function", "Category"]
+                
+                for prop_name in priority_props:
+                    if prop_name in props and props[prop_name]:
+                        context_parts.append(f"{prop_name}: {props[prop_name]}")
+                
+                # Adiciona outras propriedades (limitado a 5 mais)
+                other_props = [
+                    f"{k}: {v}" 
+                    for k, v in props.items() 
+                    if k not in priority_props and v and isinstance(v, (str, int, float))
+                ][:5]
+                context_parts.extend(other_props)
 
+            # Geometria
+            if element.get("geometry", {}).get("has_representation"):
+                context_parts.append("Com geometria 3D")
+
+            # Junta tudo com separador
+            context = " | ".join(context_parts)
             contexts.append(context)
+            
+            logger.debug("contexto_gerado", element_id=element.get("element_id"), context=context)
 
         return contexts
 
@@ -216,7 +325,14 @@ class IFCProcessorService:
 
         Returns:
             Número de elementos indexados
+            
+        Raises:
+            ValueError: Se nenhum elemento for indexado
         """
+        
+        # VALIDAÇÃO: Não pode indexar lista vazia
+        if not elements:
+            raise ValueError("Não há elementos para indexar no OpenSearch")
         if not self.embedding_service:
             logger.warning("embedding_service_nao_configurado")
             return 0
@@ -237,8 +353,8 @@ class IFCProcessorService:
                 if element.get("properties"):
                     props_text = " ".join([f"{k}: {v}" for k, v in element["properties"].items()])
 
-                # Gera embedding
-                embedding_vector = await self.embedding_service.generate_embedding(context)
+                # Gera embedding do contexto textual
+                embedding_vector = await self.embedding_service.generate_text_embedding(context)
 
                 # Cria documento OpenSearch
                 doc = BIMElementEmbedding(

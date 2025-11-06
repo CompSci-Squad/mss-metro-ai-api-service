@@ -37,7 +37,7 @@ services:
       - plugins.security.disabled=true
       - DISABLE_INSTALL_DEMO_CONFIG=true
       - bootstrap.memory_lock=true
-      - "OPENSEARCH_INITIAL_ADMIN_PASSWORD=Admin@123"  # Requerido na v2.11+
+      - "OPENSEARCH_INITIAL_ADMIN_PASSWORD=Admin@123"
     ports:
       - "9200:9200"
       - "9600:9600"
@@ -58,51 +58,64 @@ services:
     networks:
       - default
 
-  api:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    container_name: api-service
+  opensearch-dashboards:
+    image: opensearchproject/opensearch-dashboards:2.11.0
+    container_name: opensearch-dashboards
     ports:
-      - "8000:8000"
+      - "5601:5601"
     environment:
-      # AWS/S3/DynamoDB (via LocalStack)
-      - AWS_ENDPOINT=http://localstack:4566
-      - S3_ENDPOINT_URL=http://localstack:4566
-      - DYNAMODB_ENDPOINT_URL=http://localstack:4566
-      - AWS_ACCESS_KEY_ID=test
-      - AWS_SECRET_ACCESS_KEY=test
-      - AWS_DEFAULT_REGION=us-east-1
-      - S3_BUCKET=virag-bim-storage
-      # Redis
-      - REDIS_HOST=redis
-      - REDIS_PORT=6379
-      - CACHE_TTL=3600
-      # OpenSearch
-      - OPENSEARCH_HOST=opensearch
-      - OPENSEARCH_PORT=9200
-      - OPENSEARCH_HOSTS=["http://opensearch:9200"]
-      - OPENSEARCH_USE_SSL=false
-      - OPENSEARCH_VERIFY_CERTS=false
-      # VLM Models
-      - VLM_MODEL_NAME=Salesforce/blip2-opt-2.7b
-      - VLM_MODEL_CACHE_DIR=/app/models
-      - EMBEDDING_MODEL_NAME=sentence-transformers/clip-ViT-B-32
-      - USE_QUANTIZATION=true
-      - DEVICE=cpu
-      # Processing
-      - MAX_IMAGE_SIZE=1024
-      - MAX_FILE_SIZE_MB=50
-      - FUZZY_MATCH_THRESHOLD=80
-    volumes:
-      - model-cache:/app/models
+      - OPENSEARCH_HOSTS=http://opensearch:9200
+      - DISABLE_SECURITY_DASHBOARDS_PLUGIN=true
     depends_on:
-      - localstack
-      - redis
       - opensearch
     networks:
       - default
-    command: uvicorn app.main:app --host 0.0.0.0 --port 8000
+
+  # api:
+  #   build:
+  #     context: .
+  #     dockerfile: Dockerfile
+  #   container_name: api-service
+  #   ports:
+  #     - "8000:8000"
+  #   environment:
+  #     # AWS/S3/DynamoDB (via LocalStack)
+  #     - AWS_ENDPOINT=http://localstack:4566
+  #     - S3_ENDPOINT_URL=http://localstack:4566
+  #     - DYNAMODB_ENDPOINT_URL=http://localstack:4566
+  #     - AWS_ACCESS_KEY_ID=test
+  #     - AWS_SECRET_ACCESS_KEY=test
+  #     - AWS_DEFAULT_REGION=us-east-1
+  #     - S3_BUCKET=virag-bim-storage
+  #     # Redis
+  #     - REDIS_HOST=redis
+  #     - REDIS_PORT=6379
+  #     - CACHE_TTL=3600
+  #     # OpenSearch
+  #     - OPENSEARCH_HOST=opensearch
+  #     - OPENSEARCH_PORT=9200
+  #     - OPENSEARCH_HOSTS=["http://opensearch:9200"]
+  #     - OPENSEARCH_USE_SSL=false
+  #     - OPENSEARCH_VERIFY_CERTS=false
+  #     # VLM Models
+  #     - VLM_MODEL_NAME=Salesforce/blip2-opt-2.7b
+  #     - VLM_MODEL_CACHE_DIR=/app/models
+  #     - EMBEDDING_MODEL_NAME=sentence-transformers/clip-ViT-B-32
+  #     - USE_QUANTIZATION=true
+  #     - DEVICE=cpu
+  #     # Processing
+  #     - MAX_IMAGE_SIZE=1024
+  #     - MAX_FILE_SIZE_MB=50
+  #     - FUZZY_MATCH_THRESHOLD=80
+  #   volumes:
+  #     - model-cache:/app/models
+  #   depends_on:
+  #     - localstack
+  #     - redis
+  #     - opensearch
+  #   networks:
+  #     - default
+  #   command: uvicorn app.main:app --host 0.0.0.0 --port 8000
 
 volumes:
   localstack-data:
