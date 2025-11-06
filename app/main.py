@@ -22,6 +22,11 @@ app = FastAPI(
 
 app.container = container  # type: ignore
 
+# Estado dos modelos ML (usado pelo healthcheck)
+app.state.ml_models_loaded = False
+app.state.vlm_service = None
+app.state.embedding_service = None
+
 
 @app.on_event("startup")
 async def startup_event():
@@ -54,11 +59,11 @@ async def startup_event():
                     write_capacity_units=5,
                     wait=True,
                 )
-                print(f"✅ Tabela {table_name} criada!")
+                print(f"Tabela {table_name} criada!")
             else:
-                print(f"✓ Tabela {table_name} já existe")
+                print(f"Tabela {table_name} já existe")
         except Exception as e:
-            print(f"⚠️  Erro ao verificar/criar {table_name}: {e}")
+            print(f"Erro ao verificar/criar {table_name}: {e}")
 
     # Configura OpenSearch-DSL
     from app.models.opensearch import configure_opensearch
@@ -73,9 +78,40 @@ async def startup_event():
         verify_certs=False,
         ssl_show_warn=False,
     )
-    print(f"\u2705 OpenSearch-DSL configurado: {opensearch_url}")
+    print(f"OpenSearch-DSL configurado: {opensearch_url}")
 
-    print("\u2705 VIRAG-BIM iniciado com sucesso!")
+    # ========================================
+    # PRELOAD ML MODELS (Eager Loading)
+    # ========================================
+    print("\nCarregando modelos ML...")
+
+    try:
+        # 1. Carrega VLM (Vision-Language Model)
+        print("Carregando VLM (BLIP2)...")
+        from app.services.vlm_service import VLMService
+        app.state.vlm_service = VLMService()
+        print("VLM carregado e pronto!")
+
+        # 2. Carrega Embedding Service (CLIP)
+        print("Carregando Embedding Service (CLIP)...")
+        from app.services.embedding_service import EmbeddingService
+        app.state.embedding_service = EmbeddingService()
+        print("Embedding Service carregado e pronto!")
+
+        # Marca como carregado
+        app.state.ml_models_loaded = True
+
+        print("\nTodos os modelos ML carregados com sucesso!")
+        print("Sistema pronto para receber requisições!")
+
+    except Exception as e:
+        print(f"\nERRO ao carregar modelos ML: {e}")
+        print("O servidor iniciará, mas análises podem falhar!")
+        app.state.ml_models_loaded = False
+        import traceback
+        traceback.print_exc()
+
+    print("\nVIRAG-BIM iniciado com sucesso!")
 
 
 app.include_router(health.router, tags=["health"])

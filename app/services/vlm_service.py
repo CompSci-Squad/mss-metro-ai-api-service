@@ -1,4 +1,5 @@
 import io
+from pathlib import Path
 from typing import Optional
 
 import numpy as np
@@ -19,35 +20,81 @@ class VLMService:
         self.cache_dir = settings.vlm_model_cache_dir
         self.use_quantization = settings.use_quantization
 
-        logger.info("initializing_vlm_model", model=self.model_name, device=self.device)
+        logger.info(
+            "initializing_vlm_model",
+            model=self.model_name,
+            device=self.device,
+            quantization=self.use_quantization,
+            intel_optimum=INTEL_OPTIMUM_AVAILABLE
+        )
 
         # Load processor
         self.processor = AutoProcessor.from_pretrained(self.model_name, cache_dir=self.cache_dir)
 
-        # Load model with 8-bit quantization if enabled
+        # Load model with quantization strategy
         if self.use_quantization and self.device == "cpu":
-            # For CPU, use bitsandbytes quantization
+            # PyTorch Dynamic INT8 Quantization
+            logger.info("using_pytorch_int8_quantization")
+            
+            quantized_model_path = Path(self.cache_dir) / "blip2-int8-dynamic"
+            
+            # Verifica se modelo quantizado já existe em cache
+            if quantized_model_path.exists():
+                logger.info("loading_cached_quantized_model", path=str(quantized_model_path))
+                try:
+                    self.model = Blip2ForConditionalGeneration.from_pretrained(quantized_model_path)
+                    logger.info("quantized_model_loaded_from_cache")
+                except Exception as e:
+                    logger.warning("failed_to_load_cached_model", error=str(e))
+                    # Se falhar, recria
+                    quantized_model_path = None
+            
+            if not quantized_model_path or not quantized_model_path.exists():
+                # Carrega modelo original em FP32
+                logger.info("loading_fp32_model_for_quantization")
+                base_model = Blip2ForConditionalGeneration.from_pretrained(
+                    self.model_name,
+                    cache_dir=self.cache_dir
+                )
+                base_model.eval()
+                
+                # Aplica quantização dinâmica INT8
+                logger.info("applying_dynamic_int8_quantization")
+                self.model = torch.quantization.quantize_dynamic(
+                    base_model,
+                    {torch.nn.Linear},  # Quantiza apenas camadas lineares
+                    dtype=torch.qint8   # INT8
+                )
+                
+                # Salva modelo quantizado para cache
+                logger.info("saving_quantized_model", path=str(quantized_model_path))
+                quantized_model_path.mkdir(parents=True, exist_ok=True)
+                self.model.save_pretrained(str(quantized_model_path))
+                logger.info("quantization_complete")
+            
+            self.model = self.model.to(self.device)
+            logger.info("int8_quantized_model_ready")
+            
+        elif self.use_quantization:
+            # GPU ou outro device: usa float16
+            logger.info("using_float16_quantization")
             self.model = Blip2ForConditionalGeneration.from_pretrained(
                 self.model_name,
                 cache_dir=self.cache_dir,
-                load_in_8bit=True,
-                device_map="auto",
                 torch_dtype=torch.float16,
             )
-        elif self.use_quantization:
-            # For GPU with quantization
-            self.model = Blip2ForConditionalGeneration.from_pretrained(
-                self.model_name,
-                cache_dir=self.cache_dir,
-                load_in_8bit=True,
-                device_map="auto",
-            )
+            self.model = self.model.to(self.device)
         else:
             # Standard loading without quantization
-            self.model = Blip2ForConditionalGeneration.from_pretrained(self.model_name, cache_dir=self.cache_dir)
+            logger.info("loading_model_without_quantization")
+            self.model = Blip2ForConditionalGeneration.from_pretrained(
+                self.model_name,
+                cache_dir=self.cache_dir
+            )
             self.model = self.model.to(self.device)
 
         self.model.eval()
+        logger.info("vlm_model_ready")
         logger.info("vlm_model_loaded", quantized=self.use_quantization)
 
     async def generate_caption(self, image_data: bytes, prompt: str = "") -> str:

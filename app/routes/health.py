@@ -8,7 +8,7 @@ from typing import Any
 
 import structlog
 from dependency_injector.wiring import Provide, inject
-from fastapi import APIRouter, Depends, status
+from fastapi import APIRouter, Depends, Request, status
 from opensearchpy import OpenSearch
 
 from app.clients.cache import RedisCache
@@ -34,6 +34,7 @@ async def basic_health() -> dict[str, Any]:
 @router.get("/health/detailed", response_model=dict[str, Any], status_code=status.HTTP_200_OK)
 @inject
 async def detailed_health(
+    request: Request,
     redis_cache: RedisCache = Depends(Provide[Container.redis_cache]),
     s3_client: S3Client = Depends(Provide[Container.s3_client]),
 ) -> dict[str, Any]:
@@ -54,6 +55,7 @@ async def detailed_health(
         "s3": {"status": "unknown", "latency_ms": None},
         "dynamodb": {"status": "unknown", "latency_ms": None},
         "opensearch": {"status": "unknown", "latency_ms": None},
+        "ml_models": {"status": "unknown", "latency_ms": None},
     }
 
     # Check Redis
@@ -124,6 +126,39 @@ async def detailed_health(
             "error": str(e),
         }
         logger.warning("opensearch_health_check_failed", error=str(e))
+
+    # Check ML Models
+    try:
+        ml_start = time.time()
+        
+        # Verifica se modelos foram carregados no startup
+        ml_models_loaded = getattr(request.app.state, "ml_models_loaded", False)
+        vlm_service = getattr(request.app.state, "vlm_service", None)
+        embedding_service = getattr(request.app.state, "embedding_service", None)
+        
+        if ml_models_loaded and vlm_service is not None and embedding_service is not None:
+            checks["ml_models"] = {
+                "status": "healthy",
+                "latency_ms": round((time.time() - ml_start) * 1000, 2),
+                "vlm_loaded": True,
+                "embeddings_loaded": True,
+                "vlm_model": getattr(vlm_service, "model_name", "unknown"),
+                "embedding_model": getattr(embedding_service, "model_name", "unknown"),
+            }
+        else:
+            checks["ml_models"] = {
+                "status": "degraded",
+                "latency_ms": round((time.time() - ml_start) * 1000, 2),
+                "vlm_loaded": vlm_service is not None,
+                "embeddings_loaded": embedding_service is not None,
+                "message": "Models not fully loaded - analyses may be slow or fail",
+            }
+    except Exception as e:
+        checks["ml_models"] = {
+            "status": "unhealthy",
+            "error": str(e),
+        }
+        logger.warning("ml_models_health_check_failed", error=str(e))
 
     # Status geral
     all_healthy = all(check["status"] == "healthy" for check in checks.values())
