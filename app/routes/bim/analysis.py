@@ -22,17 +22,123 @@ router = APIRouter()
 logger = structlog.get_logger(__name__)
 
 
-@router.post("/analyze", response_model=AnalysisResponse, status_code=status.HTTP_200_OK)
+@router.post(
+    "/analyze",
+    response_model=AnalysisResponse,
+    status_code=status.HTTP_200_OK,
+    tags=["Análise"],
+    summary="Análise de imagem da obra",
+    responses={
+        200: {
+            "description": "Análise concluída com sucesso",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "analysis_id": "01HXYZ456DEF",
+                        "status": "completed",
+                        "message": "Análise concluída com sucesso",
+                        "result": {
+                            "analysis_id": "01HXYZ456DEF",
+                            "project_id": "01HXYZ123ABC",
+                            "image_s3_key": "bim-projects/01HXYZ123ABC/images/01HXYZ456DEF.jpg",
+                            "image_description": "Estrutura de concreto - pilares e vigas",
+                            "detected_elements": [
+                                {
+                                    "element_id": "2O2Fr$t4X7Zf8NOew3FLOH",
+                                    "element_type": "IfcColumn",
+                                    "confidence": 0.89,
+                                    "status": "completed",
+                                    "description": "Pilar de concreto detectado com alta confiança",
+                                    "deviation": None
+                                },
+                                {
+                                    "element_id": "3P3Gs$u5Y8Ag9OPfx4GMPI",
+                                    "element_type": "IfcBeam",
+                                    "confidence": 0.76,
+                                    "status": "in_progress",
+                                    "description": "Viga parcialmente construída",
+                                    "deviation": None
+                                }
+                            ],
+                            "overall_progress": 67.5,
+                            "summary": "A imagem mostra 3 pilares de concreto completos e 2 vigas em andamento. A estrutura está 67% concluída.",
+                            "alerts": [
+                                "IfcWall (Parede Norte) não identificado na imagem"
+                            ],
+                            "comparison": {
+                                "previous_analysis_id": "01HXYZ789GHI",
+                                "previous_timestamp": "2024-11-05T10:30:00Z",
+                                "progress_change": 12.5,
+                                "elements_added": [],
+                                "elements_removed": [],
+                                "elements_changed": [
+                                    {
+                                        "element_id": "3P3Gs$u5Y8Ag9OPfx4GMPI",
+                                        "element_type": "IfcBeam",
+                                        "change_type": "status_change",
+                                        "previous_status": "not_started",
+                                        "current_status": "in_progress",
+                                        "description": "Status alterado de not_started para in_progress"
+                                    }
+                                ],
+                                "summary": "Progresso de 12.5% desde a última análise. Viga iniciada."
+                            },
+                            "analyzed_at": "2024-11-07T14:20:00Z",
+                            "processing_time": 12.34
+                        }
+                    }
+                }
+            }
+        },
+        400: {
+            "description": "Erro de validação",
+            "content": {
+                "application/json": {
+                    "examples": {
+                        "invalid_format": {
+                            "summary": "Formato de imagem inválido",
+                            "value": {"detail": "Arquivo deve ser JPG, PNG, BMP ou TIFF"}
+                        },
+                        "file_too_large": {
+                            "summary": "Arquivo muito grande",
+                            "value": {"detail": "Imagem excede o tamanho máximo de 100MB"}
+                        },
+                        "invalid_project_id": {
+                            "summary": "ID de projeto inválido",
+                            "value": {"detail": "project_id deve ser um ULID válido"}
+                        }
+                    }
+                }
+            }
+        },
+        404: {
+            "description": "Projeto não encontrado",
+            "content": {
+                "application/json": {
+                    "example": {"detail": "Projeto não encontrado"}
+                }
+            }
+        },
+        500: {
+            "description": "Erro interno no processamento da análise",
+            "content": {
+                "application/json": {
+                    "example": {"detail": "Erro ao gerar embedding da imagem"}
+                }
+            }
+        }
+    }
+)
 @inject
 async def analyze_construction_image(
-    file: Annotated[UploadFile, File(description="Imagem da obra para análise")],
-    project_id: Annotated[str, Form(description="ID do projeto BIM")],
-    image_description: Annotated[str | None, Form(description="Descrição da imagem (ex: fachada, estrutura)")] = None,
-    context: Annotated[str | None, Form(description="Contexto adicional")] = None,
+    file: Annotated[UploadFile, File(description="Imagem da obra (JPG, PNG, BMP, TIFF - máx 100MB)")],
+    project_id: Annotated[str, Form(description="ID do projeto BIM (ULID)")],
+    image_description: Annotated[str | None, Form(description="Descrição da imagem (ex: 'Fachada principal', 'Estrutura 2º andar')")] = None,
+    context: Annotated[str | None, Form(description="Contexto adicional para melhorar precisão da análise")] = None,
     s3_client: S3Client = Depends(Provide[Container.s3_client]),
     bim_service: BIMAnalysisService = Depends(Provide[Container.bim_analysis_service]),
 ):
-    """Analisa imagem da obra."""
+    """Analisa imagem da obra usando VI-RAG (Vision + RAG + BIM)."""
     try:
         settings = get_settings()
 

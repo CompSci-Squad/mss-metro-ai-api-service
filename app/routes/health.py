@@ -21,9 +21,28 @@ router = APIRouter()
 logger = structlog.get_logger(__name__)
 
 
-@router.get("/health", response_model=dict[str, Any])
+@router.get(
+    "/health",
+    response_model=dict[str, Any],
+    tags=["Saúde"],
+    summary="Healthcheck básico",
+    responses={
+        200: {
+            "description": "API está online",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "status": "ok",
+                        "service": "VIRAG-BIM",
+                        "timestamp": 1699459200.123
+                    }
+                }
+            }
+        }
+    }
+)
 async def basic_health() -> dict[str, Any]:
-    """Health check básico - apenas verifica se API está rodando."""
+    """Health check básico - verifica se API está online."""
     return {
         "status": "ok",
         "service": "VIRAG-BIM",
@@ -31,7 +50,107 @@ async def basic_health() -> dict[str, Any]:
     }
 
 
-@router.get("/health/detailed", response_model=dict[str, Any], status_code=status.HTTP_200_OK)
+@router.get(
+    "/health/detailed",
+    response_model=dict[str, Any],
+    status_code=status.HTTP_200_OK,
+    tags=["Saúde"],
+    summary="Healthcheck detalhado",
+    description="""
+    Verifica todos os serviços externos e dependências da aplicação.
+    
+    ## 🔍 Componentes Verificados
+    
+    1. **Redis**: Cache de resultados
+    2. **S3/LocalStack**: Storage de arquivos (IFC, imagens)
+    3. **DynamoDB**: Banco de dados NoSQL
+    4. **OpenSearch**: Busca vetorial (embeddings)
+    5. **ML Models**: Modelos VLM e CLIP carregados
+    
+    ## 📈 Status Possíveis
+    
+    - **healthy**: Serviço funcionando perfeitamente
+    - **degraded**: Serviço funcionando parcialmente
+    - **unhealthy**: Serviço indisponível
+    - **unknown**: Status não pôde ser determinado
+    
+    ## ⏱️ Latência
+    
+    Cada serviço retorna `latency_ms` indicando tempo de resposta.
+    
+    ## 🚨 Alertas
+    
+    Se algum componente estiver unhealthy:
+    - Status geral será "unhealthy"
+    - Campo `error` detalha o problema
+    
+    ## 📝 Uso Sugerido
+    
+    - Dashboards de monitoramento
+    - Alertas automáticos
+    - Health checks de Kubernetes/Docker
+    """,
+    responses={
+        200: {
+            "description": "Health check detalhado executado",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "status": "healthy",
+                        "service": "VIRAG-BIM",
+                        "timestamp": 1699459200.123,
+                        "total_check_time_ms": 245.67,
+                        "checks": {
+                            "redis": {
+                                "status": "healthy",
+                                "latency_ms": 12.34
+                            },
+                            "s3": {
+                                "status": "healthy",
+                                "latency_ms": 45.67
+                            },
+                            "dynamodb": {
+                                "status": "healthy",
+                                "latency_ms": 89.12,
+                                "tables_exist": True
+                            },
+                            "opensearch": {
+                                "status": "healthy",
+                                "latency_ms": 56.78,
+                                "cluster_status": "green",
+                                "nodes": 1
+                            },
+                            "ml_models": {
+                                "status": "healthy",
+                                "latency_ms": 41.76,
+                                "vlm_loaded": True,
+                                "embeddings_loaded": True,
+                                "vlm_model": "Salesforce/blip2-opt-2.7b",
+                                "embedding_model": "openai/clip-vit-base-patch32"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        500: {
+            "description": "Erro ao executar health check",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "status": "unhealthy",
+                        "checks": {
+                            "redis": {
+                                "status": "unhealthy",
+                                "error": "Connection refused"
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+)
 @inject
 async def detailed_health(
     request: Request,
@@ -39,13 +158,14 @@ async def detailed_health(
     s3_client: S3Client = Depends(Provide[Container.s3_client]),
 ) -> dict[str, Any]:
     """
-    Health check detalhado - verifica todos os serviços externos.
+    Health check detalhado - verifica todos os serviços externos e ML models.
 
     Retorna status individual de cada componente:
     - Redis (cache)
     - S3/LocalStack (storage)
     - DynamoDB (database)
     - OpenSearch (vector search)
+    - ML Models (VLM + Embeddings)
     """
     start_time = time.time()
     settings = get_settings()

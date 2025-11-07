@@ -10,8 +10,12 @@ from app.clients.opensearch import OpenSearchClient
 from app.clients.s3 import S3Client
 from app.core.settings import get_settings
 from app.services.bim_analysis import BIMAnalysisService
+from app.services.comparison_service import ComparisonService
+from app.services.element_matcher import ElementMatcher
 from app.services.embedding_service import EmbeddingService
 from app.services.ifc_processor import IFCProcessorService
+from app.services.progress_calculator import ProgressCalculator
+from app.services.rag_search_service import RAGSearchService
 from app.services.vlm_service import VLMService
 
 
@@ -60,6 +64,19 @@ class Container(containers.DeclarativeContainer):
         EmbeddingService,
     )
 
+    # BIM Analysis Supporting Services
+    rag_search_service = providers.Singleton(RAGSearchService)
+
+    element_matcher = providers.Singleton(ElementMatcher)
+
+    progress_calculator = providers.Singleton(ProgressCalculator)
+
+    comparison_service = providers.Singleton(
+        ComparisonService,
+        vlm_service=vlm_service,
+        progress_calculator=progress_calculator,
+    )
+
     # BIM Services
     ifc_processor = providers.Singleton(
         IFCProcessorService,
@@ -70,4 +87,8 @@ class Container(containers.DeclarativeContainer):
         BIMAnalysisService,
         vlm_service=vlm_service,
         embedding_service=embedding_service,
+        rag_search_service=rag_search_service,
+        element_matcher=element_matcher,
+        progress_calculator=progress_calculator,
+        comparison_service=comparison_service,
     )

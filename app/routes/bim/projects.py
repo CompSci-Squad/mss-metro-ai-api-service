@@ -20,17 +20,69 @@ router = APIRouter()
 logger = structlog.get_logger(__name__)
 
 
-@router.post("/upload-ifc", response_model=IFCUploadResponse, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/upload-ifc",
+    response_model=IFCUploadResponse,
+    status_code=status.HTTP_201_CREATED,
+    tags=["Projetos"],
+    summary="Upload de arquivo IFC",
+    responses={
+        201: {
+            "description": "IFC processado com sucesso",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "project_id": "01HXYZ123ABC",
+                        "project_name": "Edifício Residencial ABC",
+                        "s3_key": "bim-projects/01HXYZ123ABC/model.ifc",
+                        "total_elements": 245,
+                        "processing_time": 18.45,
+                        "message": "IFC processado com sucesso"
+                    }
+                }
+            }
+        },
+        400: {
+            "description": "Erro de validação (arquivo inválido, nome do projeto inválido)",
+            "content": {
+                "application/json": {
+                    "examples": {
+                        "invalid_extension": {
+                            "summary": "Extensão inválida",
+                            "value": {"detail": "Arquivo deve ter extensão .ifc"}
+                        },
+                        "file_too_large": {
+                            "summary": "Arquivo muito grande",
+                            "value": {"detail": "Arquivo excede o tamanho máximo de 100MB"}
+                        },
+                        "invalid_project_name": {
+                            "summary": "Nome de projeto inválido",
+                            "value": {"detail": "Nome do projeto deve ter entre 3 e 100 caracteres"}
+                        }
+                    }
+                }
+            }
+        },
+        500: {
+            "description": "Erro interno no processamento do IFC",
+            "content": {
+                "application/json": {
+                    "example": {"detail": "Erro ao processar arquivo IFC: formato corrompido"}
+                }
+            }
+        }
+    }
+)
 @inject
 async def upload_ifc_file(
-    file: Annotated[UploadFile, File(description="Arquivo IFC do modelo BIM")],
-    project_name: Annotated[str, Form(description="Nome do projeto")],
-    description: Annotated[str | None, Form(description="Descrição do projeto")] = None,
-    location: Annotated[str | None, Form(description="Localização da obra")] = None,
+    file: Annotated[UploadFile, File(description="Arquivo IFC do modelo BIM (máx 100MB, formato .ifc)")],
+    project_name: Annotated[str, Form(description="Nome do projeto (3-100 caracteres)", min_length=3, max_length=100)],
+    description: Annotated[str | None, Form(description="Descrição opcional do projeto")] = None,
+    location: Annotated[str | None, Form(description="Localização da obra (endereço, cidade)")] = None,
     s3_client: S3Client = Depends(Provide[Container.s3_client]),
     ifc_processor: IFCProcessorService = Depends(Provide[Container.ifc_processor]),
 ):
-    """Upload e processamento de arquivo IFC."""
+    """Upload e processamento completo de arquivo IFC."""
     try:
         start_time = time.time()
         settings = get_settings()

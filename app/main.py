@@ -14,10 +14,41 @@ from app.routes.bim import router as bim_router
 container = Container()
 container.wire(modules=[__name__])
 
+# Metadados da API para Swagger
+tags_metadata = [
+    {
+        "name": "Projetos",
+        "description": "Gerenciamento de projetos BIM. Upload e processamento de arquivos IFC.",
+    },
+    {
+        "name": "Análise",
+        "description": "Análise de imagens da obra usando Vision-Language Models (VLM) e RAG.",
+    },
+    {
+        "name": "Progresso",
+        "description": "Consulta de progresso, timeline e evolução da obra ao longo do tempo.",
+    },
+    {
+        "name": "Comparação",
+        "description": "Comparação entre múltiplas análises para identificar mudanças no progresso.",
+    },
+    {
+        "name": "Alertas",
+        "description": "Gerenciamento de alertas, desvios e relatórios de qualidade.",
+    },
+    {
+        "name": "Saúde",
+        "description": "Endpoints de healthcheck para monitoramento da aplicação.",
+    },
+]
+
 app = FastAPI(
-    title="VIRAG-BIM - Sistema de Monitoramento de Obras",
-    description="Sistema automatizado de monitoramento de obras usando BIM e VLM",
+    title="VIRAG-BIM API",
     version="1.0.0",
+    openapi_tags=tags_metadata,
+    license_info={
+        "name": "MIT",
+    },
 )
 
 app.container = container  # type: ignore

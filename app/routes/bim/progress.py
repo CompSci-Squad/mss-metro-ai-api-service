@@ -11,10 +11,71 @@ router = APIRouter()
 logger = structlog.get_logger(__name__)
 
 
-@router.get("/progress/{project_id}")
+@router.get(
+    "/progress/{project_id}",
+    tags=["Progresso"],
+    summary="Progresso do projeto",
+    responses={
+        200: {
+            "description": "Progresso retornado com sucesso",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "project_id": "01HXYZ123ABC",
+                        "project_name": "Edifício Residencial ABC",
+                        "total_analyses": 5,
+                        "analyses": [
+                            {
+                                "analysis_id": "01HXYZ456DEF",
+                                "overall_progress": 67.5,
+                                "summary": "3 pilares completos, 2 vigas em andamento",
+                                "analyzed_at": "2024-11-07T14:20:00Z"
+                            },
+                            {
+                                "analysis_id": "01HXYZ789GHI",
+                                "overall_progress": 55.0,
+                                "summary": "Estrutura inicial em andamento",
+                                "analyzed_at": "2024-11-05T10:30:00Z"
+                            }
+                        ],
+                        "open_alerts": 3,
+                        "recent_alerts": [
+                            {
+                                "alert_id": "01HXYZ999XXX",
+                                "alert_type": "missing_element",
+                                "severity": "medium",
+                                "title": "Elemento não detectado",
+                                "description": "IfcWall (Parede Norte) não identificado",
+                                "created_at": "2024-11-07T14:20:30Z"
+                            }
+                        ],
+                        "overall_progress": 61.25,
+                        "last_analysis_date": "2024-11-07T14:20:00Z"
+                    }
+                }
+            }
+        },
+        404: {
+            "description": "Projeto não encontrado",
+            "content": {
+                "application/json": {
+                    "example": {"detail": "Projeto não encontrado"}
+                }
+            }
+        },
+        500: {
+            "description": "Erro interno",
+            "content": {
+                "application/json": {
+                    "example": {"detail": "Erro ao consultar progresso"}
+                }
+            }
+        }
+    }
+)
 @inject
 async def get_project_progress(project_id: str):
-    """Retorna progresso e histórico do projeto."""
+    """Retorna progresso atual, histórico de análises e alertas do projeto."""
     try:
         logger.info("consultando_progresso", project_id=project_id)
 
@@ -72,10 +133,117 @@ async def get_project_progress(project_id: str):
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e)) from e
 
 
-@router.get("/timeline/{project_id}")
+@router.get(
+    "/timeline/{project_id}",
+    tags=["Progresso"],
+    summary="Timeline do projeto",
+    description="""
+    Retorna timeline cronológica completa do projeto com evolução do progresso.
+    
+    ## 📅 Timeline
+    
+    Ordenação cronológica de todas as análises:
+    - Timestamp de cada análise
+    - Progresso percentual
+    - Resumo textual
+    - Link da imagem no S3
+    - Elementos detectados e alertas
+    
+    ## 📈 Evolução do Progresso
+    
+    Array com progresso ao longo do tempo:
+    ```json
+    "progress_evolution": [
+        {"index": 1, "date": "2024-11-01", "progress": 25.0},
+        {"index": 2, "date": "2024-11-03", "progress": 45.0},
+        {"index": 3, "date": "2024-11-05", "progress": 67.5}
+    ]
+    ```
+    
+    ## 💨 Velocidade do Progresso
+    
+    Se houver 2+ análises, calcula velocidade média:
+    ```
+    velocidade = (progresso_final - progresso_inicial) / dias_decorridos
+    ```
+    
+    **Exemplo**: 40% em 20 dias = 2% por dia
+    
+    ## 📊 Gráfico Sugerido
+    
+    Use `progress_evolution` para gerar gráfico de linha mostrando evolução.
+    """,
+    responses={
+        200: {
+            "description": "Timeline retornada com sucesso",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "project_id": "01HXYZ123ABC",
+                        "project_name": "Edifício Residencial ABC",
+                        "timeline": [
+                            {
+                                "timestamp": "2024-11-01T09:00:00Z",
+                                "analysis_id": "01HXYZ111AAA",
+                                "progress": 25.0,
+                                "summary": "Fundação iniciada",
+                                "image_url": "s3://bim-projects/01HXYZ123ABC/images/01HXYZ111AAA.jpg",
+                                "detected_elements_count": 12,
+                                "alerts_count": 1
+                            },
+                            {
+                                "timestamp": "2024-11-05T14:30:00Z",
+                                "analysis_id": "01HXYZ789GHI",
+                                "progress": 55.0,
+                                "summary": "Estrutura em andamento",
+                                "image_url": "s3://bim-projects/01HXYZ123ABC/images/01HXYZ789GHI.jpg",
+                                "detected_elements_count": 28,
+                                "alerts_count": 2
+                            },
+                            {
+                                "timestamp": "2024-11-07T14:20:00Z",
+                                "analysis_id": "01HXYZ456DEF",
+                                "progress": 67.5,
+                                "summary": "3 pilares completos, 2 vigas em andamento",
+                                "image_url": "s3://bim-projects/01HXYZ123ABC/images/01HXYZ456DEF.jpg",
+                                "detected_elements_count": 35,
+                                "alerts_count": 3
+                            }
+                        ],
+                        "progress_evolution": [
+                            {"index": 1, "date": "2024-11-01T09:00:00Z", "progress": 25.0},
+                            {"index": 2, "date": "2024-11-05T14:30:00Z", "progress": 55.0},
+                            {"index": 3, "date": "2024-11-07T14:20:00Z", "progress": 67.5}
+                        ],
+                        "total_analyses": 3,
+                        "current_progress": 67.5,
+                        "velocity": 7.08,
+                        "velocity_unit": "% por dia"
+                    }
+                }
+            }
+        },
+        404: {
+            "description": "Projeto não encontrado",
+            "content": {
+                "application/json": {
+                    "example": {"detail": "Projeto não encontrado"}
+                }
+            }
+        },
+        500: {
+            "description": "Erro interno",
+            "content": {
+                "application/json": {
+                    "example": {"detail": "Erro ao consultar timeline"}
+                }
+            }
+        }
+    }
+)
 @inject
 async def get_project_timeline(project_id: str):
-    """Retorna timeline cronológica do projeto."""
+    """Retorna timeline cronológica completa com evolução do progresso."""
     try:
         logger.info("consultando_timeline", project_id=project_id)
 
