@@ -5,14 +5,12 @@ from typing import Annotated
 import structlog
 from dependency_injector.wiring import Provide, inject
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
-from pynamodb.exceptions import DoesNotExist
 from ulid import ULID
 
-from app.clients.s3 import S3Client
 from app.core.container import Container
 from app.core.settings import get_settings
 from app.core.validators import validate_file_extension, validate_file_size, validate_ulid
-from app.models.dynamodb import BIMProject, ConstructionAnalysisModel
+from app.models.dynamodb import ConstructionAnalysisModel
 from app.schemas.bim import AnalysisResponse, ConstructionAnalysis
 from app.services.bim_analysis import BIMAnalysisService
 
@@ -135,7 +133,6 @@ async def analyze_construction_image(
     project_id: Annotated[str, Form(description="ID do projeto BIM (ULID)")],
     image_description: Annotated[str | None, Form(description="Descrição da imagem (ex: 'Fachada principal', 'Estrutura 2º andar')")] = None,
     context: Annotated[str | None, Form(description="Contexto adicional para melhorar precisão da análise")] = None,
-    s3_client: S3Client = Depends(Provide[Container.s3_client]),
     bim_service: BIMAnalysisService = Depends(Provide[Container.bim_analysis_service]),
 ):
     """Analisa imagem da obra usando VI-RAG (Vision + RAG + BIM)."""
@@ -149,26 +146,16 @@ async def analyze_construction_image(
 
         logger.info("analise_iniciada", project_id=project_id, filename=file.filename)
 
-        # Busca projeto usando ORM
-        try:
-            project = BIMProject.get(project_id)
-        except DoesNotExist:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Projeto não encontrado") from None
-
-        # Converte para dict para compatibilidade
+        # Dados do projeto vêm do OpenSearch via RAG
         project_data = {
-            "project_id": project.project_id,
-            "project_name": project.project_name,
-            "total_elements": project.total_elements,
-            "elements": project.elements,
+            "project_id": project_id,
+            "project_name": "Unknown",
+            "total_elements": 0,
+            "elements": [],
         }
 
         # ID da análise
         analysis_id = str(ULID())
-
-        # Upload imagem
-        image_s3_key = f"bim-projects/{project_id}/images/{analysis_id}.jpg"
-        await s3_client.upload_file(image_bytes, image_s3_key, content_type="image/jpeg")
 
         # Executa análise VI-RAG completa
         analysis_result = await bim_service.analyze_construction_image(
@@ -187,7 +174,7 @@ async def analyze_construction_image(
             img_doc = ImageAnalysisDocument(
                 analysis_id=analysis_id,
                 project_id=project_id,
-                image_s3_key=image_s3_key,
+                image_s3_key=None,
                 image_description=image_description or "",
                 overall_progress=str(analysis_result["overall_progress"]),
                 summary=analysis_result["summary"],
@@ -209,7 +196,7 @@ async def analyze_construction_image(
         result = ConstructionAnalysis(
             analysis_id=analysis_id,
             project_id=project_id,
-            image_s3_key=image_s3_key,
+            image_s3_key=None,
             image_description=image_description,
             detected_elements=analysis_result["detected_elements"],
             overall_progress=analysis_result["overall_progress"],
@@ -219,11 +206,11 @@ async def analyze_construction_image(
             processing_time=analysis_result["processing_time"],
         )
 
-        # Salva análise usando ORM
+        # Salva análise no DynamoDB
         analysis_model = ConstructionAnalysisModel(
             analysis_id=analysis_id,
             project_id=project_id,
-            image_s3_key=image_s3_key,
+            image_s3_key=None,
             image_description=image_description,
             overall_progress=analysis_result["overall_progress"],
             summary=analysis_result["summary"],

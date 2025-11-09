@@ -1,11 +1,11 @@
 """Rotas de gerenciamento de alertas e relatórios."""
 
 import structlog
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, HTTPException, Query, status
 from pynamodb.exceptions import DoesNotExist
 
 from app.core.validators import validate_ulid
-from app.models.dynamodb import AlertModel, BIMProject, ConstructionAnalysisModel
+from app.models.dynamodb import AlertModel, ConstructionAnalysisModel
 from app.schemas.bim import Alert, AlertListResponse, AnalysisListResponse, ConstructionAnalysis
 
 router = APIRouter()
@@ -84,12 +84,6 @@ async def list_project_alerts(project_id: str):
         validate_ulid(project_id)
 
         logger.info("listando_alertas", project_id=project_id)
-
-        # Busca projeto para validar
-        try:
-            BIMProject.get(project_id)
-        except DoesNotExist:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Projeto não encontrado") from None
 
         # Busca todos os alertas do projeto
         alerts = list(
@@ -230,12 +224,6 @@ async def list_project_reports(project_id: str, limit: int = 50):
 
         logger.info("listando_relatorios", project_id=project_id, limit=limit)
 
-        # Busca projeto
-        try:
-            project = BIMProject.get(project_id)
-        except DoesNotExist:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Projeto não encontrado") from None
-
         # Busca análises do projeto
         analyses = list(
             ConstructionAnalysisModel.project_id_index.query(
@@ -248,7 +236,7 @@ async def list_project_reports(project_id: str, limit: int = 50):
         if not analyses:
             return AnalysisListResponse(
                 project_id=project_id,
-                project_name=project.project_name,
+                project_name="Unknown",
                 total_reports=0,
                 reports=[],
                 latest_progress=None,

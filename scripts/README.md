@@ -1,4 +1,33 @@
-# Scripts de Otimização
+# Scripts
+
+## Export API Documentation
+
+Exporta a documentação da API FastAPI para arquivos HTML e JSON/YAML.
+
+### Uso
+
+```bash
+python scripts/export_docs.py
+```
+
+### Output
+
+Os arquivos são gerados em `docs/api/`:
+
+- **`index.html`** - Documentação interativa ReDoc (recomendado para compartilhar)
+- **`swagger.html`** - Documentação interativa Swagger UI
+- **`openapi.json`** - Schema OpenAPI em JSON
+- **`openapi.yaml`** - Schema OpenAPI em YAML
+
+### Compartilhar Documentação
+
+Os arquivos HTML são standalone e podem ser:
+- Abertos diretamente no navegador
+- Enviados por email
+- Hospedados em qualquer servidor web
+- Compartilhados via Google Drive, Dropbox, etc.
+
+---
 
 ## Pré-Quantização do Modelo BLIP2
 

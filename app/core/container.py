@@ -7,7 +7,6 @@ from dependency_injector import containers, providers
 
 from app.clients.cache import RedisCache
 from app.clients.opensearch import OpenSearchClient
-from app.clients.s3 import S3Client
 from app.core.settings import get_settings
 from app.services.bim_analysis import BIMAnalysisService
 from app.services.comparison_service import ComparisonService
@@ -47,12 +46,6 @@ class Container(containers.DeclarativeContainer):
     opensearch_client = providers.Singleton(
         OpenSearchClient,
         hosts=settings.provided.opensearch_hosts,
-    )
-
-    s3_client = providers.Singleton(
-        S3Client,
-        bucket_name=settings.provided.s3_bucket,
-        endpoint_url=settings.provided.s3_endpoint_url,
     )
 
     # ML Services

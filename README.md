@@ -6,7 +6,7 @@ Análise automatizada de obras usando Vision-Language Models e modelos BIM (IFC)
 
 ## Stack
 
-- **FastAPI** + **DynamoDB** + **OpenSearch** + **S3** + **Redis**
+- **FastAPI** + **DynamoDB** (Análises/Alertas) + **OpenSearch** + **Redis**
 - **VLM:** BLIP-2 quantizado
 - **Embeddings:** CLIP (sentence-transformers)
 - **IFC:** IfcOpenShell

@@ -3,15 +3,10 @@ from pydantic_settings import BaseSettings
 
 
 class Settings(BaseSettings):
-    # AWS/S3 Configuration
-    aws_endpoint: str = Field("http://localhost:4566", alias="AWS_ENDPOINT")
-    s3_bucket: str = Field("virag-bim-storage", alias="S3_BUCKET")
-    s3_endpoint_url: str = Field("http://localhost:4566", alias="S3_ENDPOINT_URL")
-
     # DynamoDB Configuration
     dynamodb_endpoint_url: str = Field("http://localhost:4566", alias="DYNAMODB_ENDPOINT_URL")
 
-    # Redis Configuration (replacing Memcached)
+    # Redis Configuration
     redis_host: str = Field("localhost", alias="REDIS_HOST")
     redis_port: int = Field(6379, alias="REDIS_PORT")
     redis_db: int = Field(0, alias="REDIS_DB")

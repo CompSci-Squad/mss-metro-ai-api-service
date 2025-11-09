@@ -12,10 +12,9 @@ from fastapi import APIRouter, Depends, Request, status
 from opensearchpy import OpenSearch
 
 from app.clients.cache import RedisCache
-from app.clients.s3 import S3Client
 from app.core.container import Container
 from app.core.settings import get_settings
-from app.models.dynamodb import BIMProject
+from app.models.dynamodb import ConstructionAnalysisModel
 
 router = APIRouter()
 logger = structlog.get_logger(__name__)
@@ -155,15 +154,13 @@ async def basic_health() -> dict[str, Any]:
 async def detailed_health(
     request: Request,
     redis_cache: RedisCache = Depends(Provide[Container.redis_cache]),
-    s3_client: S3Client = Depends(Provide[Container.s3_client]),
 ) -> dict[str, Any]:
     """
     Health check detalhado - verifica todos os serviços externos e ML models.
 
     Retorna status individual de cada componente:
     - Redis (cache)
-    - S3/LocalStack (storage)
-    - DynamoDB (database)
+    - DynamoDB (database - apenas Análises e Alertas)
     - OpenSearch (vector search)
     - ML Models (VLM + Embeddings)
     """
@@ -172,7 +169,6 @@ async def detailed_health(
 
     checks = {
         "redis": {"status": "unknown", "latency_ms": None},
-        "s3": {"status": "unknown", "latency_ms": None},
         "dynamodb": {"status": "unknown", "latency_ms": None},
         "opensearch": {"status": "unknown", "latency_ms": None},
         "ml_models": {"status": "unknown", "latency_ms": None},
@@ -193,26 +189,11 @@ async def detailed_health(
         }
         logger.warning("redis_health_check_failed", error=str(e))
 
-    # Check S3
-    try:
-        s3_start = time.time()
-        await s3_client.health_check()
-        checks["s3"] = {
-            "status": "healthy",
-            "latency_ms": round((time.time() - s3_start) * 1000, 2),
-        }
-    except Exception as e:
-        checks["s3"] = {
-            "status": "unhealthy",
-            "error": str(e),
-        }
-        logger.warning("s3_health_check_failed", error=str(e))
-
     # Check DynamoDB
     try:
         dynamo_start = time.time()
-        # Tenta verificar se tabela existe
-        table_exists = BIMProject.exists()
+        # Verifica se tabela de análises existe
+        table_exists = ConstructionAnalysisModel.exists()
         checks["dynamodb"] = {
             "status": "healthy" if table_exists else "degraded",
             "latency_ms": round((time.time() - dynamo_start) * 1000, 2),

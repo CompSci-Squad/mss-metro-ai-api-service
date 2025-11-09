@@ -64,7 +64,7 @@ class BIMProject(BaseModel):
     project_name: str
     description: str | None = None
     location: str | None = None
-    ifc_s3_key: str
+    ifc_s3_key: str | None = None
     total_elements: int
     elements: list[IFCElement] = Field(default_factory=list)
     created_at: datetime
@@ -119,7 +119,7 @@ class ConstructionAnalysis(BaseModel):
 
     analysis_id: str = Field(..., description="ID único da análise")
     project_id: str = Field(..., description="ID do projeto")
-    image_s3_key: str = Field(..., description="Chave da imagem no S3")
+    image_s3_key: str | None = Field(None, description="Chave da imagem (deprecated)")
     image_description: str | None = Field(None, description="Descrição da imagem fornecida pelo usuário")
     detected_elements: list[DetectedElement] = Field(default_factory=list, description="Elementos detectados")
     overall_progress: float = Field(..., ge=0.0, le=100.0, description="Progresso geral (%)")

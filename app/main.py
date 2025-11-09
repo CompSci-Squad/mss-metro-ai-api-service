@@ -61,11 +61,10 @@ app.state.embedding_service = None
 
 @app.on_event("startup")
 async def startup_event():
-    """Configura ORMs e serviços no startup."""
-    # Configura PynamoDB (DynamoDB)
+    """Configura serviços no startup."""
+    # Configura PynamoDB (DynamoDB) - apenas para Análises e Alertas
     from app.models.dynamodb import (
         AlertModel,
-        BIMProject,
         ConstructionAnalysisModel,
         configure_models,
     )
@@ -74,9 +73,8 @@ async def startup_event():
     configure_models(dynamodb_endpoint)
     print(f"PynamoDB configurado: {dynamodb_endpoint}")
     
-    # Auto-cria tabelas se não existirem
+    # Auto-cria tabelas se não existirem (sem BIMProject)
     tables = [
-        (BIMProject, "virag_projects"),
         (ConstructionAnalysisModel, "virag_analyses"),
         (AlertModel, "virag_alerts"),
     ]

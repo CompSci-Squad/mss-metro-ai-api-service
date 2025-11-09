@@ -7,7 +7,7 @@ services:
     ports:
       - "4566:4566"
     environment:
-      - SERVICES=s3,dynamodb,logs
+      - SERVICES=dynamodb,logs
       - DOCKER_HOST=unix:///var/run/docker.sock
       - DEBUG=1
     volumes:
@@ -79,14 +79,8 @@ services:
   #   ports:
   #     - "8000:8000"
   #   environment:
-  #     # AWS/S3/DynamoDB (via LocalStack)
-  #     - AWS_ENDPOINT=http://localstack:4566
-  #     - S3_ENDPOINT_URL=http://localstack:4566
+  #     # DynamoDB (via LocalStack)
   #     - DYNAMODB_ENDPOINT_URL=http://localstack:4566
-  #     - AWS_ACCESS_KEY_ID=test
-  #     - AWS_SECRET_ACCESS_KEY=test
-  #     - AWS_DEFAULT_REGION=us-east-1
-  #     - S3_BUCKET=virag-bim-storage
   #     # Redis
   #     - REDIS_HOST=redis
   #     - REDIS_PORT=6379

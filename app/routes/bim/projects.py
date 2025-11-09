@@ -8,11 +8,9 @@ from dependency_injector.wiring import Provide, inject
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
 from ulid import ULID
 
-from app.clients.s3 import S3Client
 from app.core.container import Container
 from app.core.settings import get_settings
 from app.core.validators import validate_file_extension, validate_file_size, validate_project_name
-from app.models.dynamodb import BIMProject
 from app.schemas.bim import IFCUploadResponse
 from app.services.ifc_processor import IFCProcessorService
 
@@ -79,7 +77,6 @@ async def upload_ifc_file(
     project_name: Annotated[str, Form(description="Nome do projeto (3-100 caracteres)", min_length=3, max_length=100)],
     description: Annotated[str | None, Form(description="Descrição opcional do projeto")] = None,
     location: Annotated[str | None, Form(description="Localização da obra (endereço, cidade)")] = None,
-    s3_client: S3Client = Depends(Provide[Container.s3_client]),
     ifc_processor: IFCProcessorService = Depends(Provide[Container.ifc_processor]),
 ):
     """Upload e processamento completo de arquivo IFC."""
@@ -95,20 +92,6 @@ async def upload_ifc_file(
 
         processed_data = await ifc_processor.process_ifc_file(file_content)
         project_id = str(ULID())
-
-        s3_key = f"bim-projects/{project_id}/model.ifc"
-        await s3_client.upload_file(file_content, s3_key, content_type="application/x-step")
-        project = BIMProject(
-            project_id=project_id,
-            project_name=project_name,
-            description=description,
-            location=location,
-            ifc_s3_key=s3_key,
-            total_elements=processed_data["total_elements"],
-            elements=processed_data["elements"],
-            project_info=processed_data["project_info"],
-        )
-        project.save()
 
         indexed_count = await ifc_processor.index_elements_to_opensearch(
             project_id=project_id, elements=processed_data["elements"]
@@ -128,7 +111,7 @@ async def upload_ifc_file(
         return IFCUploadResponse(
             project_id=project_id,
             project_name=project_name,
-            s3_key=s3_key,
+            s3_key=None,
             total_elements=processed_data["total_elements"],
             processing_time=round(processing_time, 2),
         )

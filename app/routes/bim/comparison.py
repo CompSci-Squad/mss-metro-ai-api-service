@@ -5,7 +5,7 @@ from dependency_injector.wiring import inject
 from fastapi import APIRouter, HTTPException, status
 from pynamodb.exceptions import DoesNotExist
 
-from app.models.dynamodb import BIMProject, ConstructionAnalysisModel
+from app.models.dynamodb import ConstructionAnalysisModel
 
 router = APIRouter()
 logger = structlog.get_logger(__name__)
@@ -106,13 +106,7 @@ async def compare_analyses(project_id: str, analysis_ids: str):
     try:
         logger.info("comparando_analises", project_id=project_id, analysis_ids=analysis_ids)
 
-        # Busca projeto
-        try:
-            project = BIMProject.get(project_id)
-        except DoesNotExist:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Projeto não encontrado")
-
-        # Parse IDs
+        # Busca análises
         ids = [aid.strip() for aid in analysis_ids.split(",")]
 
         # Busca análises

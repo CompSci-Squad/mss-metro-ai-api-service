@@ -5,7 +5,7 @@ from dependency_injector.wiring import inject
 from fastapi import APIRouter, HTTPException, status
 from pynamodb.exceptions import DoesNotExist
 
-from app.models.dynamodb import AlertModel, BIMProject, ConstructionAnalysisModel
+from app.models.dynamodb import AlertModel, ConstructionAnalysisModel
 
 router = APIRouter()
 logger = structlog.get_logger(__name__)
@@ -79,12 +79,6 @@ async def get_project_progress(project_id: str):
     try:
         logger.info("consultando_progresso", project_id=project_id)
 
-        # Busca projeto usando ORM
-        try:
-            project = BIMProject.get(project_id)
-        except DoesNotExist:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Projeto não encontrado")
-
         # Busca análises usando scan com filtro
         analyses = list(ConstructionAnalysisModel.scan(ConstructionAnalysisModel.project_id == project_id))
 
@@ -98,8 +92,8 @@ async def get_project_progress(project_id: str):
         last_analysis_date = max((a.analyzed_at for a in analyses), default=None) if analyses else None
 
         return {
-            "project_id": project.project_id,
-            "project_name": project.project_name,
+            "project_id": project_id,
+            "project_name": "Unknown",
             "total_analyses": len(analyses),
             "analyses": [
                 {
@@ -247,12 +241,6 @@ async def get_project_timeline(project_id: str):
     try:
         logger.info("consultando_timeline", project_id=project_id)
 
-        # Busca projeto
-        try:
-            project = BIMProject.get(project_id)
-        except DoesNotExist:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Projeto não encontrado")
-
         # Busca todas as análises ordenadas por data
         analyses = list(ConstructionAnalysisModel.scan(ConstructionAnalysisModel.project_id == project_id))
         analyses.sort(key=lambda x: x.analyzed_at)
@@ -266,7 +254,7 @@ async def get_project_timeline(project_id: str):
                     "analysis_id": analysis.analysis_id,
                     "progress": analysis.overall_progress,
                     "summary": analysis.summary,
-                    "image_url": f"s3://{analysis.image_s3_key}",
+                    "image_url": None,
                     "detected_elements_count": len(analysis.detected_elements),
                     "alerts_count": len(analysis.alerts),
                 }
