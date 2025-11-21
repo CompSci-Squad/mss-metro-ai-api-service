@@ -1,122 +1,154 @@
 import gc
 import io
-from typing import List, Optional
-
+import torch
+import structlog
 import numpy as np
+
+from typing import List
 from PIL import Image
-from sentence_transformers import SentenceTransformer
 
-from app.core.logger import logger
-from app.core.settings import settings
+from transformers import AutoProcessor, AutoModel
+from sklearn.decomposition import PCA
 
+logger = structlog.get_logger(__name__)
 
-def log_memory_usage(stage: str):
-    """Log de uso de memória para debug."""
-    try:
-        import psutil
-        process = psutil.Process()
-        mem_info = process.memory_info()
-        logger.info(
-            f"memory_usage_{stage}",
-            rss_gb=round(mem_info.rss / 1024**3, 2),
-            available_gb=round(psutil.virtual_memory().available / 1024**3, 2)
-        )
-    except ImportError:
-        pass  # psutil não instalado
+# Dimensão nativa do SigLIP
+TARGET_DIM = 1152
 
 
 class EmbeddingService:
-    """Service for generating image embeddings using CLIP."""
+    """
+    Embedding Service usando:
+      - SigLIP → texto e imagem (mesmo espaço)
+    Dimensão padrão: 1152D (com PCA opcional).
+    """
 
-    def __init__(self):
-        self.model_name = settings.embedding_model_name
-        self.cache_dir = settings.vlm_model_cache_dir
-        self.device = settings.device
-
-        # Limpa memória antes de carregar
+    def __init__(self, use_pca: bool = False):
         gc.collect()
-        logger.info("memory_cleaned_before_embedding_load")
-        log_memory_usage("before_embedding_load")
+        logger.info("loading_new_embedding_service")
 
-        logger.info("initializing_embedding_model", model=self.model_name, device=self.device)
+        # ----------------------------
+        # MODEL: SigLIP (transformers)
+        # ----------------------------
+        logger.info("loading_siglip")
+        self.siglip_name = "google/siglip2-large-patch16-256"
 
-        # Load CLIP model for embeddings
-        self.model = SentenceTransformer(self.model_name, cache_folder=self.cache_dir)
+        # Processor + model
+        self.siglip_processor = AutoProcessor.from_pretrained(self.siglip_name)
+        self.siglip_model = AutoModel.from_pretrained(self.siglip_name)
+        self.siglip_model.eval()
 
-        if self.device != "cpu":
-            self.model = self.model.to(self.device)
+        # PCA (opcional)
+        self.use_pca = use_pca
+        self.pca = None
 
-        log_memory_usage("after_embedding_load")
-        logger.info("embedding_model_loaded")
+        if use_pca:
+            logger.info("initializing_pca_target_dim", dim=TARGET_DIM)
 
-    async def generate_image_embedding(self, image_data: bytes) -> List[float]:
-        """Generate embedding vector for an image."""
-        try:
-            # Load and preprocess image
-            image = Image.open(io.BytesIO(image_data)).convert("RGB")
+    # ==============================================================
+    # HELPERS
+    # ==============================================================
 
-            # Resize if needed
-            max_size = settings.max_image_size
-            if max(image.size) > max_size:
-                image.thumbnail((max_size, max_size), Image.Resampling.LANCZOS)
-
-            # Generate embedding
-            embedding = self.model.encode(image, convert_to_numpy=True)
-
-            # Convert to list and normalize
-            embedding_list = embedding.tolist()
-
-            logger.info("image_embedding_generated", dimension=len(embedding_list))
-            return embedding_list
-
-        except Exception as e:
-            logger.error("embedding_generation_error", error=str(e))
+    def _norm(self, v: np.ndarray) -> List[float]:
+        """Normalização L2."""
+        if v is None or np.isnan(v).any():
             return []
+        v = v / (np.linalg.norm(v) + 1e-12)
+        return v.tolist()
 
+    def _apply_pca(self, vec: np.ndarray) -> np.ndarray:
+        """Redução PCA opcional."""
+        if not self.use_pca:
+            return vec
+        if self.pca is None:
+            raise RuntimeError("PCA not fitted yet — call fit_pca().")
+        return self.pca.transform([vec])[0]
+
+    # ==============================================================
+    # PUBLIC METHODS
+    # ==============================================================
+
+    async def fit_pca(self, samples: List[np.ndarray]):
+        """
+        Ajusta PCA usando embeddings brutos (texto + imagem).
+        """
+        logger.info("fitting_pca", samples=len(samples))
+
+        self.pca = PCA(n_components=TARGET_DIM)
+        self.pca.fit(samples)
+
+        logger.info("pca_fit_complete")
+
+    # --------------------------------------------------------------
     async def generate_text_embedding(self, text: str) -> List[float]:
-        """Generate embedding vector for text."""
         try:
-            # Generate embedding
-            embedding = self.model.encode(text, convert_to_numpy=True)
-            embedding_list = embedding.tolist()
+            # --- SIGLIP TEXT LIMIT FIX ---
+            # SigLIP suporta no máximo 64 tokens → limitar a ~200 chars
+            safe_text = text[:200]
 
-            logger.info("text_embedding_generated", dimension=len(embedding_list))
-            return embedding_list
+            inputs = self.siglip_processor(
+                text=[safe_text],
+                return_tensors="pt",
+                truncation=True,   # garante que nunca ultrapassa 64 tokens
+            )
+
+            with torch.no_grad():
+                vec = self.siglip_model.get_text_features(**inputs)[0].numpy()  # 1152D
+
+            # PCA opcional → reduz para 1024D
+            if self.use_pca:
+                vec = self._apply_pca(vec)
+
+            return self._norm(vec)
 
         except Exception as e:
-            logger.error("text_embedding_error", error=str(e))
+            logger.error("siglip_text_embedding_error", error=str(e))
             return []
 
-    async def generate_multimodal_embedding(self, image_data: bytes, text: str) -> List[float]:
-        """Generate combined embedding for image and text."""
+
+    # --------------------------------------------------------------
+    async def generate_image_embedding(self, image_bytes: bytes) -> List[float]:
+        """SigLIP imagem → 1152D"""
         try:
-            # Generate both embeddings
-            image_embedding = await self.generate_image_embedding(image_data)
-            text_embedding = await self.generate_text_embedding(text)
+            img = Image.open(io.BytesIO(image_bytes)).convert("RGB")
+            inputs = self.siglip_processor(images=img, return_tensors="pt")
 
-            if not image_embedding or not text_embedding:
-                return image_embedding or text_embedding
+            with torch.no_grad():
+                vec = self.siglip_model.get_image_features(**inputs)[0].numpy()
 
-            # Average the embeddings
-            image_array = np.array(image_embedding)
-            text_array = np.array(text_embedding)
-            combined = (image_array + text_array) / 2
+            if self.use_pca:
+                vec = self._apply_pca(vec)
 
-            logger.info("multimodal_embedding_generated")
-            return combined.tolist()
+            return self._norm(vec)
+
+        except Exception as e:
+            logger.error("siglip_image_embedding_error", error=str(e))
+            return []
+
+    # --------------------------------------------------------------
+    async def generate_multimodal_embedding(self, image_bytes: bytes, text: str) -> List[float]:
+        """Combinação simples texto + imagem → mesma dimensão"""
+        try:
+            emb_text = np.array(await self.generate_text_embedding(text))
+            emb_img = np.array(await self.generate_image_embedding(image_bytes))
+
+            if emb_text.size == 0 or emb_img.size == 0:
+                return []
+
+            fused = (emb_text + emb_img) / 2.0
+            return self._norm(fused)
 
         except Exception as e:
             logger.error("multimodal_embedding_error", error=str(e))
             return []
 
 
-# Singleton instance
-_embedding_service: Optional[EmbeddingService] = None
+# Singleton
+_embedding_service: EmbeddingService | None = None
 
 
 def get_embedding_service() -> EmbeddingService:
-    """Get or create embedding service singleton."""
     global _embedding_service
     if _embedding_service is None:
-        _embedding_service = EmbeddingService()
+        _embedding_service = EmbeddingService(use_pca=False)
     return _embedding_service

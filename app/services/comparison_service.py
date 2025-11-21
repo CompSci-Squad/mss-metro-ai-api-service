@@ -175,7 +175,7 @@ class ComparisonService:
 
 Provide a concise summary (2-3 sentences) of the construction progress evolution."""
 
-            comparison_summary = await self.vlm.generate_text(comparison_prompt)
+            comparison_summary = await self.vlm.generate_text(prompt=comparison_prompt)
 
             result = {
                 "previous_analysis_id": previous_analysis["analysis_id"],

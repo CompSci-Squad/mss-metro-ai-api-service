@@ -23,27 +23,35 @@ dependencies = [
     # Fuzzy matching for element detection
     "rapidfuzz>=3.0.0",
     # VLM and ML dependencies
-    "transformers>=4.36.0",
-    "torch>=2.1.0",
+    "llama-cpp-python>=0.3.16", # GGUF models (suporta MiniCPM e todos os GGUF)
+    "sentence-transformers>=2.2.0", # Embeddings (CLIP)
+    "torch>=2.1.0", # Requerido por sentence-transformers
     "torchvision>=0.16.0",
-    "onnx>=1.15.0",
-    "onnxruntime>=1.16.0",
-    "optimum[intel]>=1.16.0",
-    "sentence-transformers>=2.2.0",
-    # Additional ML utilities
     "numpy>=1.24.0",
     "opencv-python>=4.8.0",
     "scikit-image>=0.22.0",
     "dependency-injector>=4.42.0",
     # BIM/IFC Processing for VIRAG-BIM
     "ifcopenshell>=0.7.0",
-    "bitsandbytes>=0.42.0",
-    # DynamoDB ORM (apenas para Análises e Alertas)
     "pynamodb>=6.0.0",
     "uvicorn>=0.38.0",
     "accelerate>=1.11.0",
     "neural-compressor>=3.6",
     "datasets>=2.14.0",
+    "tiktoken>=0.12.0",
+    "einops>=0.8.1",
+    "transformers-stream-generator>=0.0.5",
+    "torchao>=0.14.1",
+    "huggingface-hub>=0.36.0",
+    "transformers>=4.55.4",
+    "bitsandbytes>=0.48.2",
+    "timm>=1.0.22",
+    "peft>=0.18.0",
+    "optimum>=2.0.0",
+    "scikit-learn>=1.7.2",
+    "sentencepiece>=0.2.1",
+    "protobuf>=6.33.1",
+    "openai>=2.8.1",
 ]
 
 [project.optional-dependencies]
@@ -161,7 +169,7 @@ lint-fix = "ruff check --fix app/ tests/ && ruff format app/ tests/"
 format = "ruff format app/ tests/"
 type-check = "mypy app/"
 test = "pytest tests/ -v"
-pre-quant = "python scripts/quantize_blip2.py"
+download-model = "python scripts/download_model.py"
 test-cov = "pytest tests/ --cov=app --cov-report=term-missing --cov-report=html"
 dev = "uvicorn app.main:app --reload --host 0.0.0.0 --port 8000"
 pre-commit = "pre-commit run --all-files"

@@ -10,25 +10,29 @@ logger = structlog.get_logger(__name__)
 class ProgressCalculator:
     """Serviço responsável por calcular métricas de progresso."""
 
-    def calculate_progress_metrics(self, detected_elements: list[dict], all_elements: list[dict]) -> dict:
+    def calculate_progress_metrics(self, detected_elements: list[dict], all_elements: list[dict] | None = None, total_elements: int | None = None) -> dict:
         """
         Calcula métricas de progresso da obra.
 
         Args:
             detected_elements: Elementos detectados na análise
-            all_elements: Todos os elementos do projeto BIM
+            all_elements: Todos os elementos do projeto BIM (deprecated)
+            total_elements: Total de elementos no projeto
 
         Returns:
             Dicionário com métricas de progresso
         """
-        if not all_elements:
+        # Usa total_elements se fornecido, senão usa len(all_elements)
+        if total_elements is None:
+            if not all_elements:
+                return {"overall_progress": 0.0}
+            total_elements = len(all_elements)
+        
+        if total_elements == 0:
             return {"overall_progress": 0.0}
 
-        total_elements = len(all_elements)
         detected_count = len(detected_elements)
-
         completed_count = sum(1 for e in detected_elements if e.get("status") == ProgressStatus.COMPLETED)
-
         in_progress_count = sum(1 for e in detected_elements if e.get("status") == ProgressStatus.IN_PROGRESS)
 
         # Peso: completo = 1.0, em progresso = 0.5

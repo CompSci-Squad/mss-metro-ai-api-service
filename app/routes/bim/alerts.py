@@ -4,7 +4,6 @@ import structlog
 from fastapi import APIRouter, HTTPException, Query, status
 from pynamodb.exceptions import DoesNotExist
 
-from app.core.validators import validate_ulid
 from app.models.dynamodb import AlertModel, ConstructionAnalysisModel
 from app.schemas.bim import Alert, AlertListResponse, AnalysisListResponse, ConstructionAnalysis
 
@@ -81,7 +80,6 @@ logger = structlog.get_logger(__name__)
 async def list_project_alerts(project_id: str):
     """Lista todos os alertas de um projeto (abertos e resolvidos)."""
     try:
-        validate_ulid(project_id)
 
         logger.info("listando_alertas", project_id=project_id)
 
@@ -220,8 +218,6 @@ async def list_project_alerts(project_id: str):
 async def list_project_reports(project_id: str, limit: int = 50):
     """Lista todas as análises/relatórios de um projeto (ordenados por data)."""
     try:
-        validate_ulid(project_id)
-
         logger.info("listando_relatorios", project_id=project_id, limit=limit)
 
         # Busca análises do projeto
@@ -255,7 +251,6 @@ async def list_project_reports(project_id: str, limit: int = 50):
             report = ConstructionAnalysis(
                 analysis_id=analysis.analysis_id,
                 project_id=analysis.project_id,
-                image_s3_key=analysis.image_s3_key,
                 image_description=analysis.image_description,
                 detected_elements=analysis.detected_elements,
                 overall_progress=analysis.overall_progress,

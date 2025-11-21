@@ -9,7 +9,7 @@ from ulid import ULID
 
 from app.core.container import Container
 from app.core.settings import get_settings
-from app.core.validators import validate_file_extension, validate_file_size, validate_ulid
+from app.core.validators import validate_file_extension
 from app.models.dynamodb import ConstructionAnalysisModel
 from app.schemas.bim import AnalysisResponse, ConstructionAnalysis
 from app.services.bim_analysis import BIMAnalysisService
@@ -131,7 +131,7 @@ logger = structlog.get_logger(__name__)
 async def analyze_construction_image(
     file: Annotated[UploadFile, File(description="Imagem da obra (JPG, PNG, BMP, TIFF - máx 100MB)")],
     project_id: Annotated[str, Form(description="ID do projeto BIM (ULID)")],
-    image_description: Annotated[str | None, Form(description="Descrição da imagem (ex: 'Fachada principal', 'Estrutura 2º andar')")] = None,
+    image_description: Annotated[str, Form(description="Descrição da imagem (ex: 'Fachada principal', 'Estrutura 2º andar')")],
     context: Annotated[str | None, Form(description="Contexto adicional para melhorar precisão da análise")] = None,
     bim_service: BIMAnalysisService = Depends(Provide[Container.bim_analysis_service]),
 ):
@@ -140,18 +140,32 @@ async def analyze_construction_image(
         settings = get_settings()
 
         # Validações
-        validate_ulid(project_id)
         validate_file_extension(file.filename or "", [".jpg", ".jpeg", ".png", ".bmp", ".tiff"])
-        image_bytes = await validate_file_size(file, settings.max_file_size_mb)
+        image_bytes = await file.read()
 
         logger.info("analise_iniciada", project_id=project_id, filename=file.filename)
 
-        # Dados do projeto vêm do OpenSearch via RAG
+        # Busca total de elementos do projeto no OpenSearch
+        from opensearch_dsl import connections
+        
+        try:
+            conn = connections.get_connection()
+            count_response = conn.count(
+                index="bim-elements",
+                body={"query": {"term": {"project_id": project_id}}}
+            )
+            total_elements = count_response.get("count", 0)
+            logger.info("total_elements_found", project_id=project_id, total=total_elements)
+        except Exception as e:
+            logger.warning("erro_ao_contar_elementos", error=str(e))
+            total_elements = 0
+        
+        # Dados do projeto
         project_data = {
             "project_id": project_id,
             "project_name": "Unknown",
-            "total_elements": 0,
-            "elements": [],
+            "total_elements": total_elements,
+            "elements": [],  # Lista completa não necessária para cálculo
         }
 
         # ID da análise
@@ -174,7 +188,6 @@ async def analyze_construction_image(
             img_doc = ImageAnalysisDocument(
                 analysis_id=analysis_id,
                 project_id=project_id,
-                image_s3_key=None,
                 image_description=image_description or "",
                 overall_progress=str(analysis_result["overall_progress"]),
                 summary=analysis_result["summary"],
@@ -196,7 +209,6 @@ async def analyze_construction_image(
         result = ConstructionAnalysis(
             analysis_id=analysis_id,
             project_id=project_id,
-            image_s3_key=None,
             image_description=image_description,
             detected_elements=analysis_result["detected_elements"],
             overall_progress=analysis_result["overall_progress"],
@@ -206,17 +218,27 @@ async def analyze_construction_image(
             processing_time=analysis_result["processing_time"],
         )
 
+        # Serializa elementos para DynamoDB (converte enums para string)
+        def serialize_for_dynamodb(obj):
+            """Converte enums e outros tipos não suportados pelo DynamoDB."""
+            if isinstance(obj, dict):
+                return {k: serialize_for_dynamodb(v) for k, v in obj.items()}
+            elif isinstance(obj, list):
+                return [serialize_for_dynamodb(item) for item in obj]
+            elif hasattr(obj, "value"):  # Enum
+                return obj.value
+            return obj
+
         # Salva análise no DynamoDB
         analysis_model = ConstructionAnalysisModel(
             analysis_id=analysis_id,
             project_id=project_id,
-            image_s3_key=None,
             image_description=image_description,
             overall_progress=analysis_result["overall_progress"],
             summary=analysis_result["summary"],
-            detected_elements=analysis_result["detected_elements"],
-            alerts=analysis_result["alerts"],
-            comparison=analysis_result.get("comparison"),
+            detected_elements=serialize_for_dynamodb(analysis_result["detected_elements"]),
+            alerts=serialize_for_dynamodb(analysis_result["alerts"]),
+            comparison=serialize_for_dynamodb(analysis_result.get("comparison")),
         )
         analysis_model.save()
 

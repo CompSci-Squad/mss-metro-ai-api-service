@@ -2,7 +2,7 @@
 
 import structlog
 
-from app.services.hallucination_mitigation import DetectedElement
+from app.schemas.bim import DetectedElement, ProgressStatus
 
 logger = structlog.get_logger(__name__)
 

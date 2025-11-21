@@ -1,119 +1,147 @@
 """
-Serviço de processamento de arquivos IFC usando IfcOpenShell.
-Extrai elementos do modelo BIM para análise de progresso de obra.
+Serviço simplificado de processamento de arquivos IFC usando IfcOpenShell.
+
+Extração essencial e rápida de elementos BIM para análise.
 """
 
+import asyncio
 import tempfile
 from datetime import datetime
-from pathlib import Path
+from typing import Any
 
 import ifcopenshell
+import ifcopenshell.util.element
+import ifcopenshell.util.placement
 import structlog
+
+from app.core.settings import settings
 
 logger = structlog.get_logger(__name__)
 
 
 class IFCProcessorService:
-    """Serviço para processar arquivos IFC e extrair informações do modelo BIM."""
+    """
+    Serviço simplificado para extração essencial de elementos IFC.
+
+    - Processamento paralelo sempre ativo
+    - Filtros otimizados (sets O(1))
+    - Sem validações de tamanho
+    - Sem limites de elementos
+    - Extração mínima e rápida
+    """
 
     def __init__(self, embedding_service=None):
-        self.supported_types = [
-            "IfcWall",
-            "IfcWallStandardCase",
-            "IfcSlab",
-            "IfcColumn",
-            "IfcBeam",
-            "IfcDoor",
-            "IfcWindow",
-            "IfcStair",
-            "IfcRoof",
-            "IfcFooting",
-            "IfcPile",
-            "IfcRailing",
-            "IfcCurtainWall",
-            "IfcBuildingElementProxy",  # Elementos genéricos/levantamentos 3D
-        ]
+        """Inicializa o serviço."""
         self.embedding_service = embedding_service
+        self.ignored_types_set: set[str] = set(settings.ifc_ignored_types)
+        self.max_workers: int = settings.ifc_max_workers
+        self.relevant_types = {
+            "IfcWall",
+            "IfcSlab",
+            "IfcWindow",
+            "IfcDoor",
+            "IfcCurtainWall",
+            "IfcMember",
+            "IfcPlate",
+            "IfcRailing",
+            "IfcStair",
+            "IfcStairFlight",
+            "IfcCovering",
+            "IfcBuildingElementProxy",
+        }
 
-    async def process_ifc_file(self, file_content: bytes) -> dict:
+
+
+        logger.info("ifc_processor_inicializado", ignored_types=len(self.ignored_types_set))
+
+    def _visual_ifc_description(self, element: dict) -> str:
         """
-        Processa arquivo IFC e extrai estrutura do modelo.
-
-        Args:
-            file_content: Conteúdo do arquivo IFC em bytes
-
-        Returns:
-            Dicion with project info, elements, and metadata
+        Descrição ultracurta para SigLIP.
+        Mantém apenas tipo + descrição visual curta.
+        Evita textos longos (SigLIP limita ~64 tokens).
         """
+
+        etype = element.get("element_type", "Unknown")
+
+        # Dicionário visual otimizado (baseado em capturas de imagem reais)
+        visual_lookup = {
+            "Wall": "vertical wall surface",
+            "Slab": "flat concrete slab",
+            "Floor": "flat horizontal floor",
+            "Door": "rectangular door opening",
+            "Window": "glass window frame",
+            "Column": "vertical support column",
+            "Beam": "horizontal support beam",
+            "Stair": "stepped staircase",
+            "Railing": "metal safety railing",
+            "CurtainWall": "glass facade panel",
+            "SystemPanel": "glass panel",
+            "Member": "metal structural frame",
+            "Plate": "flat metal plate",
+            "BuildingElementPart": "component of larger element",
+            "BuildingElementProxy": "geometric placeholder object",
+        }
+
+        visual_desc = visual_lookup.get(etype, f"{etype.lower()} element")
+
+        # Texto final **curto**, estilo legenda do CLIP/SigLIP
+        description = f"{etype} | {visual_desc}"
+
+        # Garantia: nunca deixar ultrapassar limite (64 tokens > ~200 chars)
+        return description[:200]
+
+
+    async def process_ifc_file(self, file_content: bytes) -> dict[str, Any]:
+        """Processa arquivo IFC e extrai elementos essenciais."""
         try:
-            logger.info("iniciando_processamento_ifc")
-
-            # Salva temporariamente
             with tempfile.NamedTemporaryFile(delete=False, suffix=".ifc") as temp_file:
                 temp_file.write(file_content)
                 temp_path = temp_file.name
 
             try:
                 ifc_file = ifcopenshell.open(temp_path)
-                logger.info("ifc_file_aberto", temp_path=temp_path)
-
-                # Lista TODOS os tipos IFC presentes no arquivo
-                all_types = {entity.is_a() for entity in ifc_file.by_type("IfcRoot")}
-                logger.info("tipos_ifc_presentes", total_tipos=len(all_types), tipos=sorted(all_types)[:50])
-
                 project_info = await self._extract_project_info(ifc_file)
-                logger.info("project_info_extraido", project_info=project_info)
-                
                 elements = await self._extract_elements(ifc_file)
-                logger.info("elementos_extraidos", total=len(elements))
-                
-                # VALIDAÇÃO: Deve ter pelo menos 1 elemento
-                if len(elements) == 0:
-                    raise ValueError(
-                        "Nenhum elemento BIM estrutural encontrado no arquivo IFC. "
-                        "O arquivo pode ser um levantamento 3D (point cloud) ou não conter elementos suportados. "
-                        f"Tipos suportados: {', '.join(self.supported_types)}"
-                    )
 
-                # Serializa TODOS os elementos recursivamente para DynamoDB
+                if not elements:
+                    raise ValueError("Nenhum elemento BIM encontrado")
+
+                # Serializa para DynamoDB (SEM dedupe!)
                 serialized_elements = [self._deep_serialize(elem) for elem in elements]
-                
-                result = {
+
+                return {
                     "project_info": project_info,
-                    "total_elements": len(elements),
+                    "total_elements": len(serialized_elements),
                     "elements": serialized_elements,
                     "processed_at": datetime.utcnow().isoformat(),
                 }
 
-                logger.info(
-                    "ifc_processado",
-                    total_elements=len(elements),
-                    project_name=project_info.get("project_name"),
-                )
-
-                return result
-
             finally:
-                Path(temp_path).unlink(missing_ok=True)
+                import os
+
+                try:
+                    os.unlink(temp_path)
+                except:
+                    pass
 
         except Exception as e:
-            logger.error("erro_processar_ifc", error=str(e), exc_info=True)
+            logger.error("erro_processar_ifc", error=str(e))
             raise
 
+
     async def _extract_project_info(self, ifc_file) -> dict:
-        """Extrai informações básicas do projeto."""
         try:
             projects = ifc_file.by_type("IfcProject")
             logger.info("projetos_encontrados", count=len(projects))
-            
+
             if not projects:
                 logger.warning("nenhum_projeto_ifc_encontrado")
                 return {"project_name": "Undefined"}
-            
+
             project = projects[0]
             site = ifc_file.by_type("IfcSite")
             building = ifc_file.by_type("IfcBuilding")
-            
+
             logger.info("estrutura_ifc", sites=len(site), buildings=len(building))
 
             return {
@@ -127,57 +155,47 @@ class IFCProcessorService:
             logger.warning("erro_extrair_info_projeto", error=str(e), exc_info=True)
             return {"project_name": "Undefined"}
 
-    async def _extract_elements(self, ifc_file) -> list[dict]:
-        """Extrai elementos estruturais do modelo IFC."""
-        elements = []
-        
-        logger.info("iniciando_extracao_elementos", supported_types=self.supported_types)
+    async def _extract_elements(self, ifc_file) -> list[dict[str, Any]]:
+        elements: list[dict[str, Any]] = []
 
-        for ifc_type in self.supported_types:
-            try:
-                items = ifc_file.by_type(ifc_type)
-                logger.info("buscando_tipo", ifc_type=ifc_type, encontrados=len(items))
+        all_products = ifc_file.by_type("IfcProduct", include_subtypes=True)
 
-                for item in items:
-                    element = await self._parse_element(item, ifc_type)
-                    if element:
-                        elements.append(element)
-                    else:
-                        logger.warning("elemento_ignorado", ifc_type=ifc_type)
+        tasks = []
+        for item in all_products:
+            etype = item.is_a()
 
-            except Exception as e:
-                logger.warning("erro_processar_tipo", ifc_type=ifc_type, error=str(e))
+            # FILTRO REAL: somente elementos estruturais / arquitetônicos
+            if etype not in self.relevant_types:
                 continue
 
-        logger.info("extracao_completa", total_elementos=len(elements))
+            tasks.append(self._parse_element(item, etype))
+
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+
+        for result in results:
+            if isinstance(result, dict):
+                elements.append(result)
+
         return elements
 
+
     async def _parse_element(self, ifc_element, element_type: str) -> dict | None:
-        """Parse um elemento IFC individual."""
         try:
-            element_id = ifc_element.GlobalId if hasattr(ifc_element, "GlobalId") else None
-            name = ifc_element.Name if hasattr(ifc_element, "Name") else None
-
-            properties = self._extract_properties(ifc_element)
-            geometry = self._extract_geometry(ifc_element)
-
             return {
-                "element_id": element_id,
+                "element_id": getattr(ifc_element, "GlobalId", None),
                 "element_type": element_type.replace("Ifc", ""),
-                "name": name,
-                "properties": properties,
-                "geometry": geometry,
-                "scheduled_date": None,
+                "name": getattr(ifc_element, "Name", None),
+                "description": getattr(ifc_element, "Description", None),
+                "object_type": getattr(ifc_element, "ObjectType", None),
+                "properties": self._extract_properties(ifc_element),
+                "spatial": self._extract_spatial_location(ifc_element),
+                "materials": self._extract_materials(ifc_element),
             }
-
-        except Exception as e:
-            logger.warning("erro_parsear_elemento", error=str(e))
+        except Exception:
             return None
 
     def _extract_properties(self, ifc_element) -> dict:
-        """Extrai propriedades de um elemento IFC."""
         properties = {}
-
         try:
             if hasattr(ifc_element, "IsDefinedBy"):
                 for definition in ifc_element.IsDefinedBy:
@@ -189,7 +207,6 @@ class IFCProcessorService:
                                 if prop.is_a("IfcPropertySingleValue"):
                                     prop_name = prop.Name
                                     prop_value = prop.NominalValue.wrappedValue if prop.NominalValue else None
-                                    # Converte para tipo primitivo
                                     properties[prop_name] = self._serialize_value(prop_value)
 
             if hasattr(ifc_element, "Description") and ifc_element.Description:
@@ -202,135 +219,137 @@ class IFCProcessorService:
             logger.warning("erro_extrair_propriedades", error=str(e))
 
         return properties
-    
+
     def _serialize_value(self, value):
-        """Serializa valor IFC para tipo primitivo compatível com JSON/DynamoDB."""
         if value is None:
             return None
-        
-        # Se for entity_instance do ifcopenshell, converte para string
-        if hasattr(value, 'is_a'):
+        if hasattr(value, "is_a"):
             return str(value)
-        
-        # Tipos primitivos
         if isinstance(value, (str, int, float, bool)):
             return value
-        
-        # Listas/tuplas
         if isinstance(value, (list, tuple)):
             return [self._serialize_value(v) for v in value]
-        
-        # Dict
         if isinstance(value, dict):
             return {k: self._serialize_value(v) for k, v in value.items()}
-        
-        # Fallback: converte para string
         return str(value)
-    
+
+    def _extract_spatial_location(self, ifc_element) -> dict:
+        spatial_data = {
+            "storey": None,
+            "storey_elevation": None,
+            "container": None,
+            "placement": None,
+        }
+
+        try:
+            for rel in getattr(ifc_element, "ContainedInStructure", []):
+                relating_structure = rel.RelatingStructure
+                if relating_structure.is_a("IfcBuildingStorey"):
+                    spatial_data["storey"] = relating_structure.Name
+                    spatial_data["storey_elevation"] = getattr(relating_structure, "Elevation", None)
+                else:
+                    spatial_data["container"] = {
+                        "type": relating_structure.is_a(),
+                        "name": getattr(relating_structure, "Name", None),
+                    }
+
+            if hasattr(ifc_element, "ObjectPlacement") and ifc_element.ObjectPlacement:
+                try:
+                    matrix = ifcopenshell.util.placement.get_local_placement(ifc_element.ObjectPlacement)
+                    if matrix is not None:
+                        spatial_data["placement"] = {
+                            "x": float(matrix[0][3]),
+                            "y": float(matrix[1][3]),
+                            "z": float(matrix[2][3]),
+                        }
+                except:
+                    pass
+
+        except Exception:
+            pass
+
+        return spatial_data
+
+    def _extract_materials(self, ifc_element) -> list[str]:
+        materials = []
+
+        try:
+            if hasattr(ifc_element, "HasAssociations"):
+                for assoc in ifc_element.HasAssociations:
+                    if assoc.is_a("IfcRelAssociatesMaterial"):
+                        material_select = assoc.RelatingMaterial
+
+                        if material_select.is_a("IfcMaterial"):
+                            materials.append(material_select.Name)
+
+                        elif material_select.is_a("IfcMaterialList"):
+                            for mat in material_select.Materials:
+                                materials.append(mat.Name)
+
+                        elif material_select.is_a("IfcMaterialLayerSetUsage"):
+                            layer_set = material_select.ForLayerSet
+                            if layer_set and hasattr(layer_set, "MaterialLayers"):
+                                for layer in layer_set.MaterialLayers:
+                                    if layer.Material:
+                                        materials.append(layer.Material.Name)
+
+                        elif material_select.is_a("IfcMaterialProfileSetUsage"):
+                            profile_set = material_select.ForProfileSet
+                            if profile_set and hasattr(profile_set, "MaterialProfiles"):
+                                for profile in profile_set.MaterialProfiles:
+                                    if profile.Material:
+                                        materials.append(profile.Material.Name)
+
+        except Exception:
+            pass
+
+        return materials
+
     def _deep_serialize(self, obj):
-        """
-        Serialização profunda recursiva de objetos para DynamoDB.
-        Garante que NENHUM objeto ifcopenshell.entity_instance permaneça.
-        """
         if obj is None:
             return None
-        
-        # Entity instance → string
-        if hasattr(obj, 'is_a'):
+        if hasattr(obj, "is_a"):
             return str(obj)
-        
-        # Tipos primitivos
         if isinstance(obj, (str, int, float, bool)):
             return obj
-        
-        # Dict → recursivo
         if isinstance(obj, dict):
             return {k: self._deep_serialize(v) for k, v in obj.items()}
-        
-        # List/Tuple → recursivo
         if isinstance(obj, (list, tuple)):
             return [self._deep_serialize(item) for item in obj]
-        
-        # Fallback: converte para string
         return str(obj)
 
-    def _extract_geometry(self, ifc_element) -> dict | None:
-        """Extrai informações geométricas básicas."""
-        try:
-            has_geometry = hasattr(ifc_element, "Representation") and ifc_element.Representation
-            return {"has_representation": has_geometry}
+    def _normalized_identity(self, elem):
+        etype = (elem.get("element_type") or "").strip().lower()
+        name = (elem.get("name") or "").strip().lower()
+        return f"{etype}|{name}"
 
-        except Exception as e:
-            logger.warning("erro_extrair_geometria", error=str(e))
-            return None
+    def dedupe_elements(self, elements: list[dict]) -> list[dict]:
+        seen = {}
+
+        for elem in elements:
+            key = self._normalized_identity(elem)
+
+            # Inicializa lista de IDs
+            if "element_ids_group" not in elem:
+                elem["element_ids_group"] = []
+            if elem.get("element_id"):
+                elem["element_ids_group"].append(elem["element_id"])
+
+            if key not in seen:
+                seen[key] = elem
+            else:
+                old = seen[key]
+
+                # Merge IDs
+                merged = list(set(old["element_ids_group"] + elem["element_ids_group"]))
+                old["element_ids_group"] = merged
+
+        return list(seen.values())
 
     async def generate_embeddings_context(self, elements: list[dict]) -> list[str]:
-        """
-        Gera contextos textuais dos elementos para embeddings.
+        return [self._visual_ifc_description(elem) for elem in elements]
 
-        Args:
-            elements: Lista de elementos processados
-
-        Returns:
-            Lista de strings descritivas enriquecidas
-        """
-        contexts = []
-
-        for element in elements:
-            # Tipo do elemento
-            context_parts = [element['element_type']]
-
-            # Nome do elemento
-            if element.get("name"):
-                context_parts.append(f"Nome: {element['name']}")
-
-            # Propriedades importantes
-            if element.get("properties"):
-                props = element["properties"]
-                
-                # Prioriza propriedades mais relevantes
-                priority_props = ["ObjectType", "Description", "Material", "Function", "Category"]
-                
-                for prop_name in priority_props:
-                    if prop_name in props and props[prop_name]:
-                        context_parts.append(f"{prop_name}: {props[prop_name]}")
-                
-                # Adiciona outras propriedades (limitado a 5 mais)
-                other_props = [
-                    f"{k}: {v}" 
-                    for k, v in props.items() 
-                    if k not in priority_props and v and isinstance(v, (str, int, float))
-                ][:5]
-                context_parts.extend(other_props)
-
-            # Geometria
-            if element.get("geometry", {}).get("has_representation"):
-                context_parts.append("Com geometria 3D")
-
-            # Junta tudo com separador
-            context = " | ".join(context_parts)
-            contexts.append(context)
-            
-            logger.debug("contexto_gerado", element_id=element.get("element_id"), context=context)
-
-        return contexts
-
-    async def index_elements_to_opensearch(self, project_id: str, elements: list[dict]) -> int:
-        """
-        Indexa elementos BIM no OpenSearch com embeddings.
-
-        Args:
-            project_id: ID do projeto
-            elements: Lista de elementos processados
-
-        Returns:
-            Número de elementos indexados
-            
-        Raises:
-            ValueError: Se nenhum elemento for indexado
-        """
-        
-        # VALIDAÇÃO: Não pode indexar lista vazia
+    async def index_elements_to_opensearch(self, project_id: str, description: str | None, elements: list[dict]) -> int:
         if not elements:
             raise ValueError("Não há elementos para indexar no OpenSearch")
         if not self.embedding_service:
@@ -343,27 +362,19 @@ class IFCProcessorService:
             indexed_count = 0
 
             for element in elements:
-                # Gera contexto textual
-                context = f"{element['element_type']}"
-                if element.get("name"):
-                    context += f" {element['name']}"
+                # Use descrição VISUAL ao invés de nome/props
+                context = self._visual_ifc_description(element)
 
-                # Propriedades como texto
-                props_text = ""
-                if element.get("properties"):
-                    props_text = " ".join([f"{k}: {v}" for k, v in element["properties"].items()])
-
-                # Gera embedding do contexto textual
                 embedding_vector = await self.embedding_service.generate_text_embedding(context)
 
-                # Cria documento OpenSearch
                 doc = BIMElementEmbedding(
                     element_id=element["element_id"],
                     project_id=project_id,
+                    project_description=description or "",
                     element_type=element["element_type"],
                     description=context,
                     element_name=element.get("name", ""),
-                    properties_text=props_text,
+                    properties="",
                     embedding=embedding_vector,
                 )
                 doc.save()

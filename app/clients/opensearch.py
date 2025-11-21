@@ -55,7 +55,7 @@ class OpenSearchClient:
                                 "method": {
                                     "name": "hnsw",
                                     "space_type": "cosinesimil",
-                                    "engine": "nmslib",
+                                    "engine": "lucene",
                                 },
                             },
                             "text_description": {"type": "text"},
@@ -104,7 +104,7 @@ def _ensure_index() -> None:
                             "method": {
                                 "name": "hnsw",
                                 "space_type": "cosinesimil",
-                                "engine": "nmslib",
+                                "engine": "lucene",
                             },
                         },
                         "text_description": {"type": "text"},

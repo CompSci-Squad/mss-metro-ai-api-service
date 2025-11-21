@@ -213,3 +213,5 @@ nc_workspace
 
 # Generated API documentation
 docs/api/
+output/
+*.txt

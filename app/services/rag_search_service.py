@@ -2,7 +2,6 @@
 
 import structlog
 
-from app.core.cache_decorator import cache_result
 from app.schemas.bim import DetectedElement, ProgressStatus
 
 logger = structlog.get_logger(__name__)
@@ -11,11 +10,9 @@ logger = structlog.get_logger(__name__)
 class RAGSearchService:
     """Serviço responsável por buscas vetoriais no OpenSearch."""
 
-    @cache_result(ttl=1800, key_prefix="rag_context")
-    async def fetch_rag_context(self, image_embedding: list[float], project_id: str, top_k: int = 10) -> dict:
+    async def fetch_rag_context(self, image_embedding: list[float], project_id: str, top_k: int = 150) -> dict:
         """
         Busca contexto RAG usando embedding da imagem.
-        Resultado cacheado por 30 minutos.
 
         Args:
             image_embedding: Vetor embedding da imagem
@@ -29,11 +26,10 @@ class RAGSearchService:
             from app.models.opensearch import BIMElementEmbedding
 
             # Busca elementos similares usando KNN
-            search = BIMElementEmbedding.search_by_vector(
+            # search_by_vector já retorna lista de resultados (não precisa .execute())
+            results = BIMElementEmbedding.search_by_vector(
                 query_embedding=image_embedding, size=top_k, project_id=project_id
             )
-
-            results = search.execute()
 
             # Extrai elementos relevantes
             context_elements = []
@@ -83,29 +79,59 @@ class RAGSearchService:
             )
 
             detected = []
+            
+            # Coleta scores para normalização
+            scores = [hit.meta.score for hit in results if hasattr(hit.meta, "score")]
+            
+            if scores:
+                max_score = max(scores)
+                min_score = min(scores)
+                score_range = max_score - min_score
+            else:
+                max_score = 1.0
+                min_score = 0.0
+                score_range = 1.0
 
             for hit in results:
-                # Score de similaridade (0-1)
-                confidence = hit.meta.score if hasattr(hit.meta, "score") else 0.5
+                # Normaliza score para 0-1
+                raw_score = hit.meta.score if hasattr(hit.meta, "score") else 0.5
+                
+                # Calcula confidence
+                if score_range > 0.01:
+                    # Scores variados: normaliza no range
+                    confidence = (raw_score - min_score) / score_range
+                else:
+                    # Scores similares: usa score diretamente (já está 0-1)
+                    # KNN scores geralmente estão entre 0 e 1
+                    confidence = min(raw_score, 1.0) if raw_score >= 0 else 0.5
+
+                # Clamp para garantir range [0, 1]
+                confidence = max(0.0, min(1.0, confidence))
 
                 # Filtra por IDs se especificado
                 if target_ids and hit.element_id not in target_ids:
                     continue
 
-                # Determina status baseado na confiança
-                if confidence > 0.8:
+                # Determina status baseado na confiança normalizada
+                if confidence > 0.7:
                     status = ProgressStatus.COMPLETED
-                elif confidence > 0.5:
+                elif confidence > 0.4:
                     status = ProgressStatus.IN_PROGRESS
                 else:
                     status = ProgressStatus.NOT_STARTED
+
+                # Monta descrição no formato: "Nome (Tipo)"
+                element_name = getattr(hit, 'element_name', None) or 'Sem nome'
+                element_type = getattr(hit, 'element_type', 'Element')
+                
+                final_description = f"{element_name} ({element_type})"
 
                 detected_element = DetectedElement(
                     element_id=hit.element_id,
                     element_type=hit.element_type,
                     confidence=round(confidence, 3),
                     status=status,
-                    description=hit.description,
+                    description=final_description,
                     deviation=None,
                 )
 

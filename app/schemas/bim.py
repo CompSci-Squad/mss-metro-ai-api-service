@@ -51,7 +51,6 @@ class IFCUploadResponse(BaseModel):
 
     project_id: str = Field(..., description="ID único do projeto")
     project_name: str = Field(..., description="Nome do projeto")
-    s3_key: str = Field(..., description="Chave do arquivo no S3")
     total_elements: int = Field(..., description="Total de elementos processados")
     processing_time: float = Field(..., description="Tempo de processamento em segundos")
     message: str = Field(default="IFC processado com sucesso")
@@ -119,7 +118,6 @@ class ConstructionAnalysis(BaseModel):
 
     analysis_id: str = Field(..., description="ID único da análise")
     project_id: str = Field(..., description="ID do projeto")
-    image_s3_key: str | None = Field(None, description="Chave da imagem (deprecated)")
     image_description: str | None = Field(None, description="Descrição da imagem fornecida pelo usuário")
     detected_elements: list[DetectedElement] = Field(default_factory=list, description="Elementos detectados")
     overall_progress: float = Field(..., ge=0.0, le=100.0, description="Progresso geral (%)")

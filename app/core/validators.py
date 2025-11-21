@@ -9,30 +9,6 @@ from pathlib import Path
 from fastapi import HTTPException, UploadFile, status
 from ulid import ULID
 
-
-def validate_ulid(ulid_str: str) -> str:
-    """
-    Valida formato ULID.
-
-    Args:
-        ulid_str: String para validar
-
-    Returns:
-        String ULID validada
-
-    Raises:
-        HTTPException: Se ULID for inválido
-    """
-    try:
-        ULID.from_str(ulid_str)
-        return ulid_str
-    except (ValueError, AttributeError) as e:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"ULID inválido: {ulid_str}",
-        ) from e
-
-
 def validate_file_extension(filename: str, allowed_extensions: list[str]) -> str:
     """
     Valida extensão de arquivo.
@@ -61,32 +37,6 @@ def validate_file_extension(filename: str, allowed_extensions: list[str]) -> str
         )
 
     return filename
-
-
-async def validate_file_size(file: UploadFile, max_size_mb: int) -> bytes:
-    """
-    Valida tamanho do arquivo.
-
-    Args:
-        file: Arquivo upload
-        max_size_mb: Tamanho máximo em MB
-
-    Returns:
-        Conteúdo do arquivo em bytes
-
-    Raises:
-        HTTPException: Se arquivo exceder tamanho máximo
-    """
-    content = await file.read()
-    size_mb = len(content) / (1024 * 1024)
-
-    if size_mb > max_size_mb:
-        raise HTTPException(
-            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-            detail=f"Arquivo muito grande: {size_mb:.2f}MB. Máximo: {max_size_mb}MB",
-        )
-
-    return content
 
 
 def sanitize_filename(filename: str) -> str:

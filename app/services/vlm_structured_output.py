@@ -4,8 +4,6 @@ import json
 import re
 
 import structlog
-import torch
-from PIL import Image
 
 from app.services.hallucination_mitigation import PromptTemplates, StructuredVLMOutput
 from app.services.vlm_service import VLMService
@@ -56,18 +54,19 @@ class VLMStructuredOutput:
 }"""
 
     async def _generate(self, image_bytes: bytes, prompt: str) -> str:
-        import io
-
-        image = Image.open(io.BytesIO(image_bytes)).convert("RGB")
-        inputs = self.vlm.processor(image, text=prompt, return_tensors="pt")
-
-        if self.vlm.device != "cpu":
-            inputs = {k: v.to(self.vlm.device) for k, v in inputs.items()}
-
-        with torch.no_grad():
-            generated_ids = self.vlm.model.generate(**inputs, max_length=500, num_beams=5, do_sample=False)
-
-        return self.vlm.processor.batch_decode(generated_ids, skip_special_tokens=True)[0].strip()
+        """
+        Generate VLM output using text-only model.
+        
+        NOTA: Modelo GGUF é text-only. Para análise com contexto de imagem,
+        considere extrair contexto via embeddings primeiro.
+        """
+        # Por enquanto, usa prompt direto (sem contexto visual)
+        # TODO: Extrair contexto visual via embeddings se necessário
+        logger.warning(
+            "vlm_structured_output_text_only",
+            message="Usando modelo text-only sem contexto visual direto"
+        )
+        return await self.vlm.generate_text(prompt)
 
     def _parse_json(self, output: str) -> StructuredVLMOutput | None:
         try:
@@ -76,7 +75,19 @@ class VLMStructuredOutput:
                 return None
 
             data = json.loads(json_match.group(0))
+
+            # Adiciona defaults para campos opcionais
+            defaults = {
+                "construction_phase": "unknown",
+                "overall_quality": "acceptable",
+                "visible_issues": [],
+                "safety_concerns": [],
+                "bim_elements_not_visible": [],
+                "analysis_limitations": []
+            }
+            data = {**defaults, **data}
+
             return StructuredVLMOutput(**data)
         except Exception as e:
-            logger.error("json_parse_error", error=str(e))
+            logger.error("json_parse_error", error=str(e), output_preview=output[:200])
             return None

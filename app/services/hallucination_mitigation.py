@@ -15,6 +15,8 @@ import structlog
 from pydantic import BaseModel, Field, validator
 from sklearn.metrics.pairwise import cosine_similarity
 
+from app.schemas.bim import DetectedElement, ProgressStatus
+
 logger = structlog.get_logger(__name__)
 
 
@@ -23,49 +25,8 @@ logger = structlog.get_logger(__name__)
 # ============================================================================
 
 
-class ConfidenceLevel(str):
-    """Níveis de confiança permitidos."""
-
-    HIGH = "HIGH"
-    MEDIUM = "MEDIUM"
-    LOW = "LOW"
-
-
-class ConstructionStatus(str):
-    """Status de construção permitidos."""
-
-    COMPLETED = "completed"
-    IN_PROGRESS = "in_progress"
-    NOT_STARTED = "not_started"
-    NOT_VISIBLE = "not_visible"
-
-
-class DetectedElement(BaseModel):
-    """Elemento detectado pela VLM com score de confiança."""
-
-    element_type: str = Field(description="Tipo do elemento (wall, column, beam, slab, foundation)")
-    element_name: Optional[str] = Field(None, description="Nome/identificador do elemento do BIM")
-    confidence: str = Field(description="Nível de confiança: HIGH, MEDIUM, LOW")
-    status: str = Field(description="Status da construção: completed, in_progress, not_started, not_visible")
-    description: str = Field(description="Descrição detalhada do elemento observado")
-    visible_percentage: Optional[int] = Field(
-        None, ge=0, le=100, description="Percentual visível do elemento na imagem (0-100)"
-    )
-    uncertainty_notes: Optional[str] = Field(None, description="Notas sobre incertezas na identificação")
-
-    @validator("confidence")
-    def validate_confidence(cls, v):
-        allowed = ["HIGH", "MEDIUM", "LOW"]
-        if v.upper() not in allowed:
-            raise ValueError(f"Confidence must be one of {allowed}")
-        return v.upper()
-
-    @validator("status")
-    def validate_status(cls, v):
-        allowed = ["completed", "in_progress", "not_started", "not_visible"]
-        if v.lower() not in allowed:
-            raise ValueError(f"Status must be one of {allowed}")
-        return v.lower()
+# Usando DetectedElement e ProgressStatus de app.schemas.bim
+# Removida definição duplicada para unificar schemas
 
 
 class ViewingConditions(BaseModel):
@@ -366,7 +327,7 @@ class HallucinationMitigator:
         try:
             # Gera embeddings
             image_emb = await self.embedding_service.generate_image_embedding(image_bytes)
-            text_emb = await self.embedding_service.generate_embedding(text_description)
+            text_emb = await self.embedding_service.generate_text_embedding(text_description)
 
             # Calcula similaridade coseno
             image_emb_np = np.array(image_emb).reshape(1, -1)

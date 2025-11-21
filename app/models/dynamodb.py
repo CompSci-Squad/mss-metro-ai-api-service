@@ -81,7 +81,6 @@ class ConstructionAnalysisModel(Model):
 
     # Attributes
     project_id = UnicodeAttribute()
-    image_s3_key = UnicodeAttribute()
     image_description = UnicodeAttribute(null=True)  # Descrição fornecida pelo usuário
     overall_progress = NumberAttribute()
     summary = UnicodeAttribute()

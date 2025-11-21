@@ -21,7 +21,7 @@ class Settings(BaseSettings):
     opensearch_verify_certs: bool = Field(False, alias="OPENSEARCH_VERIFY_CERTS")
 
     # VLM Model Configuration
-    vlm_model_name: str = Field("Salesforce/blip2-opt-2.7b", alias="VLM_MODEL_NAME")
+    vlm_model_name: str = Field("openbmb/MiniCPM-V-4_5", alias="VLM_MODEL_NAME")
     vlm_model_cache_dir: str = Field("./models", alias="VLM_MODEL_CACHE_DIR")
     embedding_model_name: str = Field("sentence-transformers/clip-ViT-B-32", alias="EMBEDDING_MODEL_NAME")
     use_quantization: bool = Field(True, alias="USE_QUANTIZATION")
@@ -34,6 +34,26 @@ class Settings(BaseSettings):
 
     # Validation Configuration
     fuzzy_match_threshold: int = Field(80, alias="FUZZY_MATCH_THRESHOLD")
+
+    # IFC Processing Configuration
+    max_ifc_file_size_mb: int = Field(500, alias="MAX_IFC_FILE_SIZE_MB")
+    max_elements_to_process: int = Field(10000, alias="MAX_ELEMENTS_TO_PROCESS")
+    ifc_ignored_types: list[str] = Field(
+        default_factory=lambda: [
+            "IfcSpace",
+            "IfcOpeningElement",
+            "IfcGrid",
+            "IfcAnnotation",
+            "IfcAxis2Placement3D",
+            "IfcCartesianPoint",
+            "IfcDirection",
+        ],
+        alias="IFC_IGNORED_TYPES"
+    )
+    ifc_geometry_fallback_enabled: bool = Field(True, alias="IFC_GEOMETRY_FALLBACK_ENABLED")
+    ifc_geometry_max_vertices: int = Field(100000, alias="IFC_GEOMETRY_MAX_VERTICES")
+    ifc_parallel_processing: bool = Field(True, alias="IFC_PARALLEL_PROCESSING")
+    ifc_max_workers: int = Field(4, alias="IFC_MAX_WORKERS")
 
     class Config:
         env_file = ".env"
